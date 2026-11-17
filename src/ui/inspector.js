@@ -244,6 +244,7 @@ export function createInspector(ui, cb) {
         head(e.kind === 'drop' ? 'plug' : 'cable', e.kind === 'drop' ? 'Service drop' : `${tn(e.tier)} line`, `${Math.round(e.length)} m`) +
         stp +
         (e.state === 'fault' ? `<div class="why"><b>Storm damage.</b>A crew must repair it (1 kit + ${bal.costs.repairLabour} ¢).</div>` : '') +
+        (e.kind === 'line' && (e.state === 'trip' || e.overMin > 0) && ctx.lineAdvice ? ((A) => `<div class="why"><b>Why it’s overloaded</b>${A.who} ${A.why}</div><div class="why"><b>How to fix</b>${A.fixes.map((f) => `• ${f}`).join('<br>')}</div>`)(ctx.lineAdvice(e.id)) : '') +
         (rating ? `<div class="meter-label" style="margin-top:12px"><span>Load ${fmt.kw(e.loadKW)}</span><span>Rating ${fmt.kw(rating)}</span></div>${meter((e.loadKW / rating) * 100)}` : '') +
         kv([e.kind === 'line' ? ['Losses now', loss >= 1 ? fmt.kw(loss) : `${(loss * 1000).toFixed(0)} W`] : null, e.kind === 'drop' ? ['Feeds', esc(state.map.customers.find((c) => c.id === e.b)?.name || '')] : null, job ? ['Crew', job] : null]) +
         (e.tie ? `<div class="why ${e.open ? '' : 'ok'}"><b>Tie switch — normally open</b>${e.open ? 'Open: the two feeders run separately. Close it to re-route supply around a fault.' : 'Closed: power can flow between the two feeders.'}</div><div class="actions">${btn(e.open ? 'Close switch' : 'Open switch', { type: 'switch', target: e.id, open: !e.open }, { primary: e.open, icon: 'cable' })}</div>` : '') +

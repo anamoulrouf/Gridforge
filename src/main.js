@@ -11,13 +11,13 @@ import { createPeople } from './render/people.js';
 import { createHud } from './ui/hud.js';
 import { createInspector } from './ui/inspector.js';
 import { createMenus } from './ui/menus.js';
-import { h, icon } from './ui/dom.js';
+import { h, icon, esc } from './ui/dom.js';
 import { createAudio } from './audio/synth.js';
 import { createSim, loadSim } from './sim/sim.js';
-import { rectDist, dist as d2 } from './sim/grid.js';
+import { rectDist, dist as d2, lineRating } from './sim/grid.js';
 import { S, fmt } from './data/strings.js';
 import { STAGES } from './missions/index.js';
-import { srcType, ratedKW } from './sim/power.js';
+import { srcType, ratedKW, lineContributors } from './sim/power.js';
 import { windFrac } from './sim/weather.js';
 
 const params = new URLSearchParams(location.search);
@@ -186,6 +186,52 @@ const srcName = (id) => {
 const mainGen = () => Object.keys(S_().gens).find((id) => srcType(bal, S_().gens[id].type).dispatch) || null;
 const tierName = (t) => S.tierName[t] || t;
 const fill = (s, v) => s.replace(/\{(\w+)\}/g, (_, k) => (v[k] != null ? v[k] : ''));
+
+/** Plain-language explanation of an overloaded line: who loads it and fixes that work in this
+ *  model (supply follows the shortest route, so a second line beside it would carry nothing). */
+const adviceCache = new Map();
+function lineAdvice(id) {
+  const st = S_();
+  const e = st.edges[id];
+  if (!e) return null;
+  // a tripped line carries nothing: explain it with the flow it had when it overloaded
+  if (e.state === 'trip' && adviceCache.has(id)) return adviceCache.get(id);
+  const kb = (x) => `<kbd>${x}</kbd>`;
+  const rating = e.ratingKW || lineRating(bal, e.tier);
+  const tier = tierName(e.tier);
+  const list = lineContributors(st, id);
+  const name = (c) => esc(custOf(c.id)?.name || 'a customer');
+  const top = list.slice(0, 2).map((c) => `<b>${name(c)}</b> (${fmt.kw(c.kw)})`);
+  const more = list.length - top.length;
+  const who = list.length ? `${top.join(list.length === 2 ? ' and ' : ', ')}${more > 0 ? ` and ${more} other customer${more === 1 ? '' : 's'}` : ''} ${list.length === 1 ? 'is' : 'are'} fed through it.` : '';
+  const big = list.find((c) => c.kw > rating);
+  const has = (t) => M.tools.includes(t);
+  const hvBuilt = Object.values(st.nodes).some((n) => n.kind === 'pole' && n.tier === 'HV');
+  const hvSrc = (map.sources || []).find((s) => s.tier === 'HV' && !st.gens[s.id]?.retired);
+  const hvFrom = hvBuilt ? 'your 66 kV towers' : hvSrc ? `the <b>${esc(hvSrc.name)}</b>` : 'a 66 kV source';
+  const fixes = [];
+  if (e.tier === 'MV' && has('sub')) {
+    if (big) fixes.push(`<b>${name(big)}</b> alone needs ${fmt.kw(big.kw)}, more than any ${tier} line can carry. Give it a direct supply: remove its service drop (${kb('X')}), then connect it (${kb('C')}) straight to a substation within ${bal.network.mvDropReach ?? 30} m.`);
+    fixes.push(`Bring the power closer at 66 kV: press ${kb('L')}, start from ${hvFrom} and run towers up to the load. Press ${kb('B')} on the last tower to build a substation, and feed the load from there.`);
+    fixes.push(`Or split the load: run a second ${tier} feeder out of the substation and move some of these customers onto it (${kb('X')} their drop, then ${kb('C')} to the new feeder), so no line carries more than ${fmt.kw(rating)}.`);
+  } else if (e.tier === 'LV') {
+    fixes.push(`Split the load: mount another transformer (${kb('T')}) on an ${tierName('MV')} pole near these customers, then move some of them to it (${kb('X')} their drop, then ${kb('C')}).`);
+    fixes.push(`Bring the ${tierName('MV')} line closer to them before stepping down, so the ${tier} runs are short.`);
+  } else {
+    fixes.push(`Split the load: build a separate route from another source or substation to some of these customers, and move them onto it (${kb('X')} their drop, then ${kb('C')}).`);
+  }
+  if (M.ui?.programsPanel) fixes.push('To buy time, lower demand beyond the line (Supply panel → Programs).');
+  const A = {
+    load: fmt.kw(e.loadKW),
+    rating: fmt.kw(rating),
+    tier,
+    who,
+    fixes,
+    why: 'Power reaches each customer along one route, the shortest from a source. Everything beyond this line draws through it, so a second line built beside it carries nothing. The fix is a different route, or a higher voltage.',
+  };
+  if (list.length) adviceCache.set(id, A);
+  return A;
+}
 function say(key, vars = {}) {
   for (const [who, text] of LINES[key] || []) hud.say(who, fill(text, vars));
 }
@@ -281,7 +327,7 @@ function refreshInspector(force) {
   const now = performance.now();
   if (!force && now - lastInsp < 250) return;
   lastInsp = now;
-  inspector.render(app.mode === 'game' ? app.selected : null, S_(), { bal, mission: M, xfmrName, srcName, srcDef, crewJob: crewJobText, crewBusy, dropOf: (b) => app.sim.dropOf(b) });
+  inspector.render(app.mode === 'game' ? app.selected : null, S_(), { bal, mission: M, xfmrName, srcName, srcDef, crewJob: crewJobText, crewBusy, lineAdvice, dropOf: (b) => app.sim.dropOf(b) });
   hud.el.alerts.classList.toggle('wide', inspector.el.hidden);
 }
 
@@ -687,6 +733,11 @@ function learnOnce(key, vars = {}) {
   learnQ.push([key, vars]);
   if (!learnOpen) setTimeout(nextLearn, 350);
 }
+/** Show a learning card now (even if seen before), e.g. from an alert's "How to fix". */
+function learnNow(key, vars = {}) {
+  learnQ.push([key, vars]);
+  if (!learnOpen) setTimeout(nextLearn, 0);
+}
 function nextLearn() {
   if (learnOpen || !learnQ.length) return;
   if (app.mode !== 'game' || S_().result) {
@@ -894,15 +945,20 @@ function handleEvents(evs) {
       }
       case 'lineOverload':
         audio.play('warn');
-        hud.alert({ id: 'lovl-' + e.target, level: 'warn', title: `${tierName(st.edges[e.target]?.tier)} line overloaded — ${fmt.pct(e.pct)}`, text: `It trips in ~${e.inMin} min unless its load drops. Add a parallel route or move load to a higher-voltage line.`, actions: [{ label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
-        learnOnce('congestion');
+        const A = lineAdvice(e.target);
+        const showFix = () => learnNow('congestion', { ...A, fix1: A.fixes[0], fix2: A.fixes[1], fix3: A.fixes[2], fix4: A.fixes[3], mins: e.inMin, focus: () => focus({ kind: 'edge', id: e.target }) });
+        hud.alert({ id: 'lovl-' + e.target, level: 'warn', title: `${A.tier} line overloaded: ${A.load} on a ${A.rating} line`, text: `${A.who} It switches off in ~${e.inMin} min unless the load drops.<br><b>Fix:</b> ${A.fixes[0]}`, actions: [{ label: 'How to fix', primary: true, fn: showFix }, { label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
+        if (!app.learnSeen.has('congestion')) {
+          app.learnSeen.add('congestion');
+          showFix();
+        }
         break;
       case 'lineTrip': {
         const sp = siteOf(e.target);
         audio.play('trip');
         if (sp) fx.burst(sp.x, 8, sp.z, 'sparks', 40);
         hud.dismiss('lovl-' + e.target);
-        hud.alert({ id: 'ltrip-' + e.target, level: 'critical', title: `${tierName(st.edges[e.target]?.tier)} line tripped on overload`, text: 'Customers beyond it are dark. Reduce the flow, then Reset the line.', actions: [{ label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
+        hud.alert({ id: 'ltrip-' + e.target, level: 'critical', title: `${tierName(st.edges[e.target]?.tier)} line tripped on overload`, text: `Customers beyond it are dark. You can Reset it after ${bal.lineProtection?.coolMin ?? 30} min, but it will trip again until the load on it is lower.`, actions: [{ label: 'How to fix', primary: true, fn: () => { const A = lineAdvice(e.target); learnNow('congestion', { ...A, fix1: A.fixes[0], fix2: A.fixes[1], fix3: A.fixes[2], fix4: A.fixes[3], mins: bal.lineProtection?.delayMin ?? 30, focus: () => focus({ kind: 'edge', id: e.target }) }); } }, { label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
         break;
       }
       case 'statement': {

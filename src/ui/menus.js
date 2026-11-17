@@ -217,7 +217,7 @@ export function createMenus(ui) {
         h('h2', { text: fill(L.title) }),
         h('div', { class: 'sec', html: `<h5>What happened?</h5><p>${fill(L.what)}</p>` }),
         h('div', { class: 'sec', html: `<h5>Why it happened</h5><p>${fill(L.why)}</p>` }),
-        h('div', { class: 'sec', html: `<h5>What can I do?</h5><ul>${L.todo.map((t) => `<li>${fill(t)}</li>`).join('')}</ul>` }),
+        h('div', { class: 'sec', html: `<h5>What can I do?</h5><ul>${L.todo.map(fill).filter((t) => t.trim()).map((t) => `<li>${t}</li>`).join('')}</ul>` }),
         h('div', { class: 'sec real', html: `<h5>Real-world connection</h5><p>${fill(L.real)}</p>` }),
         h('div', { class: 'simplified', text: 'Simplified model — real systems are more complex.' }),
         h('div', { class: 'row-actions' }, vars.focus ? h('button', { class: 'btn', onclick: () => (m.close(), vars.focus()) }, 'Show me') : null, h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')),

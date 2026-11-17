@@ -11,6 +11,14 @@ import { solarFrac, windFrac } from './weather.js';
 
 const CONTRIB = (n) => n.kind === 'gen';
 
+// Who draws through each line in the last solve (UI explanations only; kept off the state so
+// saves and replay hashes are unaffected).
+const contribs = new WeakMap();
+/** Customers whose supply flows through line `edgeId`, largest first: [{ id, kw }]. */
+export function lineContributors(state, edgeId) {
+  return (contribs.get(state)?.get(edgeId) || []).slice().sort((a, b) => b.kw - a.kw || (a.id < b.id ? -1 : 1));
+}
+
 function buildGraph(state, ignoreState) {
   const adj = new Map();
   const add = (u, v, w, edgeId) => {
@@ -288,6 +296,16 @@ export function solve(state, bal, ctx = {}) {
   }
 
   const { load, losses } = computeLoads(served);
+  const via = new Map();
+  for (const r of served) {
+    if (r.kw <= 0) continue;
+    for (const eid of r.path) {
+      if (eid.startsWith('X:') || state.edges[eid]?.kind !== 'line') continue;
+      if (!via.has(eid)) via.set(eid, []);
+      via.get(eid).push({ id: r.c.id, kw: r.kw });
+    }
+  }
+  contribs.set(state, via);
   const servedSet = new Map(served.map((r) => [r.c.id, r.kw]));
   let servedKW = 0;
   const islNeed = new Map();

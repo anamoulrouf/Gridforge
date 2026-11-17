@@ -9,6 +9,7 @@ export const CAST = {
 
 // Learning panel: What happened · Why · What can I do · Real-world connection
 export const LEARN = {
+  congestion: { title: 'A line is overloaded', what: 'This {tier} line is carrying {load}, but it is rated for {rating}. {who} Protection switches it off after about {mins} min so it doesn’t overheat, and everyone beyond it goes dark.', why: '{why}', todo: ['{fix1}', '{fix2}', '{fix3}', '{fix4}'], real: 'Grid “congestion” is why new factories and power plants often wait years for a connection: the lines to them have to be reinforced first.' },
   firstLight: {
     title: 'First light',
     what: 'Electricity is flowing from the generator, through 11 kV lines and a transformer, into homes at 400 V.',

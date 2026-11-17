@@ -116,7 +116,7 @@ kbd { font-family: var(--mono); font-size: 0.78em; padding: 1px 5px; border-radi
 .st-info { color: var(--cyan); border-color: rgba(124, 196, 240, 0.45); }
 .why { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: rgba(255, 236, 205, 0.05); border-left: 3px solid var(--amber); font-size: 0.9em; line-height: 1.4; }
 .why.ok { border-left-color: var(--green); }
-.why b { display: block; margin-bottom: 3px; }
+.why > b:first-child { display: block; margin-bottom: 3px; }
 .kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 0.92em; margin: 10px 0; }
 .kv .k { color: var(--muted); }
 .kv .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -165,7 +165,8 @@ kbd { font-family: var(--mono); font-size: 0.78em; padding: 1px 5px; border-radi
 .alert.critical .ic { color: var(--red); }
 .alert.info .ic { color: var(--cyan); }
 .alert.good .ic { color: var(--green); }
-.alert b { display: block; font-size: 0.95em; }
+.alert > div > b { display: block; font-size: 0.95em; }
+.alert p b { color: var(--text); font-weight: 600; }
 .alert p { margin: 2px 0 0; font-size: 0.86em; color: var(--muted); line-height: 1.35; }
 .alert .acts { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
 .alert .x { margin-left: auto; background: none; border: 0; color: var(--dim); cursor: pointer; align-self: flex-start; padding: 0 2px; font-size: 1.1em; }
