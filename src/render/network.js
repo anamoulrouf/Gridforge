@@ -100,7 +100,10 @@ export function createNetworkView(scene, map) {
   const canGeo = new THREE.CylinderGeometry(0.85, 0.85, 1.9, 14);
   const finGeo = new THREE.BoxGeometry(0.08, 1.4, 2.0);
   const ringGeo = new THREE.TorusGeometry(1.0, 0.13, 6, 24);
+  for (const g of [...Object.values(poleGeo), ...Object.values(armGeo), insGeo, canGeo, finGeo, ringGeo]) g.userData.shared = true;
   const dotTex = glowTexture();
+  const dotGeo = new THREE.PlaneGeometry(1, 1);
+  dotGeo.userData.shared = true;
 
   let views = { nodes: {}, edges: {} };
   let topoKey = '';
@@ -174,12 +177,14 @@ export function createNetworkView(scene, map) {
       g.add(v.ring);
     }
     // glowing node dot on the ground (the reference's bright junctions)
-    v.dotMat = new THREE.SpriteMaterial({ map: dotTex, color: COL.dead.clone(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    v.dotMat = new THREE.MeshBasicMaterial({ map: dotTex, color: COL.dead.clone(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     v.dotMat.userData.own = true;
-    v.dot = new THREE.Sprite(v.dotMat);
-    const s = n.kind === 'xfmr' ? 9 : n.kind === 'gen' ? 10 : 5.5;
+    v.dot = new THREE.Mesh(dotGeo, v.dotMat);
+    v.dot.rotation.x = -Math.PI / 2;
+    v.dot.renderOrder = 3;
+    const s = n.kind === 'xfmr' ? 8 : n.kind === 'gen' ? 9 : 5;
     v.dot.scale.set(s, s, 1);
-    v.dot.position.set(n.kind === 'gen' ? map.generator.port.x - n.x : 0, 0.5, n.kind === 'gen' ? map.generator.port.z - n.z : 0);
+    v.dot.position.set(n.kind === 'gen' ? map.generator.port.x - n.x : 0, 0.3, n.kind === 'gen' ? map.generator.port.z - n.z : 0);
     g.add(v.dot);
     root.add(g);
     return v;
@@ -374,7 +379,7 @@ export function createNetworkView(scene, map) {
       else if (overlay === 'tier') c = tier === 'MV' ? COL.mv : COL.lv;
       else if (overlay === 'capacity' && n.kind === 'xfmr') c = loadColor(n.loadPct / 100);
       else c = n.energized ? (tier === 'MV' ? COL.mv.clone().lerp(COL.cyan, 0.55) : COL.cyan) : COL.dead;
-      v.dotMat.color.copy(c);
+      v.dotMat.color.copy(c).multiplyScalar(n.energized ? 2.2 : 1);
       v.dotMat.opacity = n.energized || overlay !== 'flow' ? 1 : 0.6;
       if (v.ringMat) {
         let rc;
@@ -406,6 +411,7 @@ export function createNetworkView(scene, map) {
   ghostRoot.add(ghostRibbon);
   const ghostPoles = [];
   const ghostPoleGeo = new THREE.CylinderGeometry(0.35, 0.45, 8, 8);
+  ghostPoleGeo.userData.shared = true;
   function showGhost(points, ok, time, tier = 'LV') {
     ghostRoot.visible = !!points;
     if (!points) return;

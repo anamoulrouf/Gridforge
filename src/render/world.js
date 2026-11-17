@@ -149,7 +149,7 @@ export function createWorld(scene, map) {
       box(1.2, 2.2, 0.1, doorMat, c.x - c.w * 0.25, 1.1, c.z + c.d / 2 + 0.05, g, false);
       ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
       facadeWindows(c.id, c, height, 2, 2, 2, 1.3, 1.1);
-      addPool(c.id, c.x, c.z, 26, '#ffb36b', 0.32);
+      addPool(c.id, c.x, c.z, 20, '#ffb36b', 0.16);
     } else if (c.type === 'school') {
       height = 8.4;
       box(c.w, height, c.d, wallMats[1], c.x, height / 2, c.z, g);
@@ -160,7 +160,7 @@ export function createWorld(scene, map) {
       box(2.6, 3, 0.1, doorMat, c.x, 1.5, c.z + c.d / 2 + 0.06, g, false);
       ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
       facadeWindows(c.id, c, height, 2, 8, 3);
-      addPool(c.id, c.x, c.z + 4, 46, '#ffb36b', 0.38);
+      addPool(c.id, c.x, c.z + 4, 38, '#ffb36b', 0.2);
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(9, 2.2), new THREE.MeshBasicMaterial({ map: signTexture('SCHOOL'), transparent: true, color: new THREE.Color(0.08, 0.1, 0.12) }));
       sign.position.set(c.x, 5.4, c.z + c.d / 2 + 0.12);
       g.add(sign);
@@ -177,7 +177,7 @@ export function createWorld(scene, map) {
       box(3, 1.4, 3, unitMat, c.x + 4, height + 1.3, c.z - 2, g);
       ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
       facadeWindows(c.id, c, height, 2, 5, 3);
-      addPool(c.id, c.x, c.z + 3, 36, '#ffc58a', 0.42);
+      addPool(c.id, c.x, c.z + 3, 30, '#ffc58a', 0.22);
       for (const side of [1, -1]) {
         const cross = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.6), new THREE.MeshBasicMaterial({ map: crossTexture(), transparent: true, color: new THREE.Color(0.05, 0.12, 0.08) }));
         cross.position.set(c.x + 4.5, height - 1.6, c.z + (c.d / 2 + 0.12) * side);
@@ -213,7 +213,7 @@ export function createWorld(scene, map) {
           addBulb(c.id, new THREE.Vector3(c.x - c.w / 2 + f * c.w, 4.4 - sag, c.z + s * (c.d / 2 + 0.3)), 0.32, 0.05 + f * 0.8, i % 3 === 0 ? new THREE.Color(2.4, 1.0, 0.5) : WARM);
         }
       }
-      addPool(c.id, c.x, c.z, 40, '#ffb36b', 0.5);
+      addPool(c.id, c.x, c.z, 32, '#ffb36b', 0.24);
     }
     buildings[c.id] = { group: g, height, c };
   }
@@ -298,7 +298,7 @@ export function createWorld(scene, map) {
   lamps.forEach(([x, z, gid], i) => {
     box(0.18, 6, 0.18, lampMat, x, 3, z, root, false);
     addBulb(gid, new THREE.Vector3(x, 6.1, z), 0.38, (i % 7) / 8 + 0.05, new THREE.Color(2.3, 1.7, 1.0));
-    addPool(gid, x, z, 16, '#ffcf8a', 0.5);
+    addPool(gid, x, z, 12, '#ffcf8a', 0.26);
   });
 
   // ---------------------------------------------------------------- instanced windows + bulbs

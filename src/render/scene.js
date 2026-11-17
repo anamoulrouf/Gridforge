@@ -7,7 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 export const PALETTE = {
   night: { sky: new THREE.Color('#0a1626'), fog: new THREE.Color('#0d1b2c'), hemiSky: new THREE.Color('#5d82b8'), hemiGround: new THREE.Color('#0c1522'), hemi: 1.25, key: new THREE.Color('#9ab8ff'), keyI: 1.1 },
-  day: { sky: new THREE.Color('#2a4058'), fog: new THREE.Color('#2b4057'), hemiSky: new THREE.Color('#9fbfdc'), hemiGround: new THREE.Color('#1a2430'), hemi: 1.15, key: new THREE.Color('#ffe2bd'), keyI: 1.6 },
+  day: { sky: new THREE.Color('#58789a'), fog: new THREE.Color('#5a7898'), hemiSky: new THREE.Color('#d2e6f8'), hemiGround: new THREE.Color('#2a3644'), hemi: 2.1, key: new THREE.Color('#fff1dc'), keyI: 2.6 },
   dusk: { sky: new THREE.Color('#1c2236'), fog: new THREE.Color('#1a2234'), hemiSky: new THREE.Color('#6a6a9a'), hemiGround: new THREE.Color('#0b0e18'), hemi: 0.8, key: new THREE.Color('#ff9e6a'), keyI: 0.9 },
 };
 

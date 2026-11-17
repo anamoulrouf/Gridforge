@@ -307,3 +307,10 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 .reduce-motion * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+@media (max-height: 820px) {
+  #objectives { max-height: calc(100vh - 340px); padding: 10px 12px 6px; }
+  .obj { padding: 4px 2px; }
+  #comms .msg:nth-last-child(n + 3) { display: none; }
+  #inspector { max-height: calc(100vh - 170px); }
+  #tutorial { bottom: 96px; width: 360px; }
+}

@@ -328,7 +328,12 @@ const pickNodeId = (pk) => (pk && (pk.kind === 'node' || pk.kind === 'gen') ? pk
 
 // ------------------------------------------------------------------ input
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-canvas.addEventListener('pointerenter', () => (app.mouse.in = true));
+canvas.addEventListener('pointerenter', (e) => {
+  app.mouse.in = true;
+  app.mouse.x = e.clientX;
+  app.mouse.y = e.clientY;
+  app.mouse.moved = false;
+});
 canvas.addEventListener('pointerleave', () => {
   app.mouse.in = false;
   hud.showTip(null);
@@ -408,6 +413,7 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   app.mouse.x = e.clientX;
   app.mouse.y = e.clientY;
+  app.mouse.moved = true;
   if (rpan) {
     const p = rig.groundAt(e.clientX, e.clientY);
     if (Math.hypot(e.clientX - rpan.x, e.clientY - rpan.y) > 4) rpan.moved = true;
@@ -481,7 +487,10 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift') app.shift = true;
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (app.mode === 'ending' && e.key === 'Escape') return app.ending?.jump();
-  if (app.mode !== 'game') return;
+  if (app.mode !== 'game') {
+    if (e.key === 'Escape' && menus.isOpen()) menus.closeTop();
+    return;
+  }
   if (e.key === 'Escape') {
     e.preventDefault();
     if (menus.isOpen()) return void menus.closeTop();
@@ -589,18 +598,29 @@ function updateHover() {
 }
 
 // ------------------------------------------------------------------ events → feedback
+const learnQ = [];
+let learnOpen = false;
 function learnOnce(key, vars = {}) {
   if (app.learnSeen.has(key)) return;
   app.learnSeen.add(key);
+  learnQ.push([key, vars]);
+  if (!learnOpen) setTimeout(nextLearn, 350);
+}
+function nextLearn() {
+  if (learnOpen || !learnQ.length) return;
+  if (app.mode !== 'game' || S_().result) {
+    learnQ.length = 0;
+    return;
+  }
+  const [key, vars] = learnQ.shift();
   const pausing = cfg.autoPause;
   if (pausing) hold(+1);
-  setTimeout(() => {
-    if (app.mode !== 'game') {
-      if (pausing) hold(-1);
-      return;
-    }
-    menus.learn(key, vars, () => pausing && hold(-1));
-  }, 350);
+  learnOpen = true;
+  menus.learn(key, vars, () => {
+    learnOpen = false;
+    if (pausing) hold(-1);
+    setTimeout(nextLearn, 400);
+  });
 }
 function focusAct(id) {
   return { label: 'Focus', fn: () => focus(id === 'gen' ? { kind: 'gen' } : { kind: 'node', id }) };
@@ -820,8 +840,9 @@ function schedulePower() {
     const cs = map.customers.filter(pred);
     return cs.filter((c) => ['on', 'partial'].includes(app.shown[c.id])).length / cs.length;
   };
-  world.setGroupLevel('street-n', frac((c) => c.z < 0) >= 0.5 ? 1 : 0);
-  world.setGroupLevel('street-s', frac((c) => c.z > 0) >= 0.5 ? 1 : 0);
+  const dark = app.mode !== 'game' || app.nightK > 0.55;
+  world.setGroupLevel('street-n', dark && frac((c) => c.z < 0) >= 0.5 ? 1 : 0);
+  world.setGroupLevel('street-s', dark && frac((c) => c.z > 0) >= 0.5 ? 1 : 0);
 }
 
 // ------------------------------------------------------------------ tutorial
@@ -851,6 +872,7 @@ function tutDone(step) {
 }
 let tutKey = '';
 function updateTutorial() {
+  document.getElementById('hint').style.visibility = app.tut >= 0 && app.mode === 'game' ? 'hidden' : '';
   if (app.tut < 0 || app.mode !== 'game') {
     inspector.el.style.maxHeight = '';
     tutEl.hidden = true;
@@ -1074,6 +1096,8 @@ function startGame(save) {
     app.tut = sim ? (save.ui?.tut ?? -1) : cfg.tutorial ? 0 : -1;
     app.lastHour = -1;
     app.resultShown = false;
+    learnQ.length = 0;
+    learnOpen = false;
     tutKey = '';
     resetVisuals();
     hud.clearAlerts();
@@ -1126,7 +1150,11 @@ function showResult() {
   const r = S_().result;
   store.del(SAVE_KEY);
   hold(+1);
+  learnQ.length = 0;
   setTimeout(() => {
+    menus.closeAll();
+    learnOpen = false;
+    app.hold = 1;
     if (r.outcome === 'victory') {
       audio.play('victory');
       menus.victory(r, {
@@ -1285,7 +1313,7 @@ function frame() {
     if (app.keys.has('d') || app.keys.has('arrowright')) px += sp;
     if (app.keys.has('w') || app.keys.has('arrowup')) pz -= sp;
     if (app.keys.has('s') || app.keys.has('arrowdown')) pz += sp;
-    if (app.mouse.in && !rpan && document.hasFocus()) {
+    if (app.mouse.in && app.mouse.moved && !rpan && document.hasFocus()) {
       const m = 6;
       if (app.mouse.x <= m) px -= sp;
       if (app.mouse.x >= window.innerWidth - m) px += sp;
@@ -1302,6 +1330,7 @@ function frame() {
   const tod = app.mode === 'game' ? st.clock % 1440 : app.mode === 'ending' ? 22 * 60 : 19.6 * 60;
   const { dayW } = G.setTimeOfDay(tod, app.mode === 'ending' ? 'night' : null);
   const nightK = 1 - dayW * 0.7;
+  app.nightK = nightK;
 
   // --- visuals
   net.sync(st);
@@ -1377,6 +1406,7 @@ if (TEST) {
 }
 
 // ------------------------------------------------------------------ go
+hud.show(false);
 requestAnimationFrame(frame);
 if (params.has('skipintro') || TEST) startMenu();
 else startIntro();
