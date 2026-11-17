@@ -6,12 +6,13 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { rng } from '../sim/rng.js';
 import { rectDist } from '../sim/grid.js';
-import { poolTexture, grassTexture, soilTexture, plateTexture, clockTexture, stripeTexture, hazardTexture, ribTexture, crossTexture } from './textures.js';
+import { poolTexture, grassTexture, soilTexture, plateTexture, clockTexture, stripeTexture, hazardTexture, ribTexture, crossTexture, roofTileTexture } from './textures.js';
 
 const WARM = new THREE.Color(2.6, 1.45, 0.6); // HDR window light (blooms at night)
 const WARM_SOFT = new THREE.Color(1.8, 1.05, 0.45);
 const GLASS_DAY = new THREE.Color('#5b7a90');
 const GLASS_NIGHT = new THREE.Color(0.016, 0.018, 0.024);
+const WARM_DIM = new THREE.Color();
 
 export const TILE = { half: 224, radius: 48, depth: 18 };
 
@@ -42,6 +43,10 @@ export function createWorld(scene, map) {
     const k = color + JSON.stringify(o);
     return (mats[k] ||= new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0, ...o }));
   };
+  const tileTex = roofTileTexture();
+  const roofMats = {};
+  /** Terracotta-style tiled roof material (cached by colour). */
+  const roof = (color) => (roofMats[color] ||= new THREE.MeshStandardMaterial({ color, map: tileTex, roughness: 0.72 }));
   const geos = {};
   const rbox = (w, h, d, r = 0.35) => {
     const rr = Math.max(0.02, Math.min(r, w / 2 - 0.01, h / 2 - 0.01, d / 2 - 0.01));
@@ -305,7 +310,7 @@ export function createWorld(scene, map) {
       const two = R() < 0.55;
       const wallH = two ? 5.4 : 3.8;
       const wallMat = mat(PAL.walls[Math.floor(R() * PAL.walls.length)]);
-      const roofMat = mat(PAL.roofs[Math.floor(R() * PAL.roofs.length)], { roughness: 0.7 });
+      const roofMat = roof(PAL.roofs[Math.floor(R() * PAL.roofs.length)]);
       const w = c.w - 0.6;
       const d = c.d - 1.2;
       block(g, w + 0.5, 0.5, d + 0.5, mat(PAL.concrete), 0, 0.25, 0, { r: 0.12, cast: false }); // plinth
@@ -329,7 +334,7 @@ export function createWorld(scene, map) {
       const wallH = 7.6;
       const brick = mat(PAL.brick);
       const trim = mat(PAL.cream);
-      const roofMat = mat('#c4542c', { roughness: 0.7 });
+      const roofMat = roof('#c4542c');
       block(g, w + 0.8, 0.5, d + 0.8, mat(PAL.concrete), 0, 0.25, 0, { r: 0.12, cast: false });
       block(g, w, wallH, d, brick, 0, wallH / 2 + 0.3, 0, { r: 0.3 });
       block(g, w + 0.25, 0.35, d + 0.25, trim, 0, wallH / 2 + 0.3, 0, { r: 0.12 }); // floor band
@@ -375,9 +380,15 @@ export function createWorld(scene, map) {
       block(g, w + 0.8, 0.5, d + 0.8, mat(PAL.concrete), 0, 0.25, 0, { r: 0.12, cast: false });
       block(g, w, wallH, d, white, 0, wallH / 2 + 0.3, 0, { r: 0.35 });
       block(g, w + 0.3, 0.5, d + 0.3, teal, 0, 3.7, 0, { r: 0.18 }); // accent band
-      block(g, w + 0.4, 0.7, d + 0.4, mat('#e3dccd'), 0, wallH + 0.55, 0, { r: 0.2 }); // parapet
-      block(g, w - 0.8, 0.2, d - 0.8, mat('#9c968c'), 0, wallH + 0.7, 0, { r: 0.05, cast: false }); // roof deck
-      block(g, 3.2, 1.6, 2.6, mat(PAL.steel, { metalness: 0.3 }), w * 0.22, wallH + 1.6, -d * 0.15, { r: 0.2 });
+      const para = mat('#e9e2d4');
+      block(g, w + 0.4, 0.9, 0.5, para, 0, wallH + 0.7, d / 2 - 0.05, { r: 0.15 }); // parapet ring
+      block(g, w + 0.4, 0.9, 0.5, para, 0, wallH + 0.7, -d / 2 + 0.05, { r: 0.15 });
+      block(g, 0.5, 0.9, d, para, w / 2 - 0.05, wallH + 0.7, 0, { r: 0.15 });
+      block(g, 0.5, 0.9, d, para, -w / 2 + 0.05, wallH + 0.7, 0, { r: 0.15 });
+      block(g, w - 0.4, 0.16, d - 0.4, mat('#8f8a80', { roughness: 1 }), 0, wallH + 0.36, 0, { r: 0.04, cast: false }); // roof deck
+      block(g, 2.2, 0.5, 2.2, mat('#bfe2ea', { roughness: 0.2, metalness: 0.2 }), -w * 0.18, wallH + 0.6, d * 0.1, { r: 0.12 }); // skylight
+      block(g, 1.6, 1.0, 1.6, mat(PAL.steel, { metalness: 0.3 }), w * 0.05, wallH + 0.9, -d * 0.22, { r: 0.15 });
+      block(g, 3.2, 1.6, 2.6, mat(PAL.steel, { metalness: 0.3 }), w * 0.22, wallH + 1.2, -d * 0.15, { r: 0.2 });
       block(g, 6, 0.4, 3.4, teal, -w * 0.22, 3.4, d / 2 + 1.6, { r: 0.15 }); // canopy
       for (const sx of [-1, 1]) cyl(g, 0.14, 0.14, 3.2, white, -w * 0.22 + sx * 2.6, 1.7, d / 2 + 3.0, 8);
       block(g, 2.4, 2.8, 0.25, mat('#3b6f7a'), -w * 0.22, 1.7, d / 2 + 0.06, { r: 0.06, cast: false });
@@ -395,44 +406,62 @@ export function createWorld(scene, map) {
       addPool(c.id, c.x, c.z - 3, 28, '#ffc58a', 0.2);
       walkPath(c, g.rotation.y, d);
     } else if (c.type === 'market') {
+      // open-air market (reso/graphic image 24): striped stall canopies you can see from above,
+      // a small corner shop with an awning, crates and produce.
       g.rotation.y = facing(c, false);
       const w = c.w - 1;
       const d = c.d - 1;
-      const eave = 4.8;
-      block(g, w + 1, 0.4, d + 1, mat('#cdb995'), 0, 0.2, 0, { r: 0.12, cast: false }); // paved floor
-      const post = mat(PAL.wood);
-      for (const sx of [-1, 0, 1]) for (const sz of [-1, 1]) cyl(g, 0.24, 0.26, eave, post, sx * (w / 2 - 0.4), eave / 2 + 0.4, sz * (d / 2 - 0.4), 8);
-      block(g, w, 0.45, 0.45, post, 0, eave + 0.3, d / 2 - 0.4, { r: 0.1 });
-      block(g, w, 0.45, 0.45, post, 0, eave + 0.3, -d / 2 + 0.4, { r: 0.1 });
-      height = gable(g, w, d, eave + 0.5, 2.8, mat(PAL.cream), mat('#d4612d', { roughness: 0.7 }), 1.0);
+      block(g, w + 1, 0.3, d + 1, mat('#d8c39b'), 0, 0.15, 0, { r: 0.12, cast: false }); // paved square
+      const shop = new THREE.Group();
+      shop.position.set(-w / 2 + 3.2, 0, -d / 2 + 2.6);
+      g.add(shop);
+      const sw = mat('#f2d9b0');
+      block(shop, 6, 4.4, 5, sw, 0, 2.5, 0, { r: 0.3 });
+      height = gable(shop, 6, 5, 4.7, 2.2, sw, roof('#d4612d'), 0.5);
+      block(shop, 1.2, 2.2, 0.22, mat(PAL.woodDark), 1.4, 1.4, 2.56, { r: 0.06, cast: false });
+      const shopAwn = new THREE.Mesh(rbox(5.4, 0.14, 1.6, 0.05), new THREE.MeshStandardMaterial({ map: stripeTexture('#d9443a', '#f6efe2'), roughness: 0.8 }));
+      shopAwn.position.set(0, 3.2, 3.1);
+      shopAwn.rotation.x = 0.35;
+      shopAwn.castShadow = true;
+      shop.add(shopAwn);
       const awn = [['#d9443a', '#f6efe2'], ['#e9862c', '#f6efe2'], ['#3f8f6b', '#f6efe2'], ['#3d6fa8', '#f6efe2']];
       const produce = ['#e8432f', '#f3b22e', '#6bb23a', '#9c4bb0', '#f07d2a'];
-      for (let i = 0; i < 4; i++) {
-        const sx = -w / 2 + 2.6 + i * ((w - 5.2) / 3);
-        block(g, 3.0, 1.2, 1.8, mat('#a8774a'), sx, 1.0, 0.6, { r: 0.12 });
-        const aw = new THREE.Mesh(rbox(3.4, 0.16, 2.2, 0.06), new THREE.MeshStandardMaterial({ map: stripeTexture(...awn[i]), roughness: 0.8 }));
-        aw.position.set(sx, 2.9, 1.0);
-        aw.rotation.x = 0.28;
-        aw.castShadow = true;
-        g.add(aw);
-        for (let k = 0; k < 3; k++) {
-          const b = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), mat(produce[(i + k) % produce.length]));
-          b.scale.y = 0.6;
-          b.position.set(sx - 0.9 + k * 0.9, 1.75, 0.6);
-          g.add(b);
+      const spots = [[1.5, -2.0], [6.0, -2.0], [-4.5, 2.6], [1.5, 2.6], [6.0, 2.6]];
+      spots.forEach(([sx, sz], i) => {
+        const st = new THREE.Group();
+        st.position.set(sx, 0, sz);
+        g.add(st);
+        for (const px of [-1.7, 1.7]) for (const pz of [-1.3, 1.3]) cyl(st, 0.1, 0.1, 2.9, mat(PAL.wood), px, 1.75, pz, 6);
+        const stripes = new THREE.MeshStandardMaterial({ map: stripeTexture(...awn[i % awn.length]), roughness: 0.8 });
+        for (const s2 of [1, -1]) {
+          const a = new THREE.Mesh(rbox(4.0, 0.12, 1.75, 0.04), stripes);
+          a.position.set(0, 3.45, s2 * 0.82);
+          a.rotation.x = s2 * 0.38;
+          a.castShadow = true;
+          st.add(a);
         }
-      }
-      for (let i = 0; i < 5; i++) block(g, 0.9, 0.7, 0.9, mat('#b9894f'), -w / 2 + 1 + R() * (w - 2), 0.75, -d / 2 + 1.2 + R() * 1.5, { r: 0.06 });
-      ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
+        block(st, 3.0, 1.0, 1.4, mat('#a8774a'), 0, 0.8, 0, { r: 0.1 });
+        for (let k = 0; k < 3; k++) {
+          const b = new THREE.Mesh(new THREE.SphereGeometry(0.38, 10, 8), mat(produce[(i + k) % produce.length]));
+          b.scale.y = 0.6;
+          b.position.set(-0.95 + k * 0.95, 1.45, 0);
+          st.add(b);
+        }
+      });
+      for (let i = 0; i < 5; i++) block(g, 0.9, 0.7, 0.9, mat('#b9894f'), -w / 2 + 1 + R() * 3, 0.65, d / 2 - 1 - R() * 2, { r: 0.06 });
+      ensureGroup(c.id, new THREE.Vector3(c.x, Math.max(height, 4.5), c.z), Math.max(height, 4.5));
       g.updateMatrixWorld(true);
-      for (const s of [1, -1]) {
+      // festoon lights strung across the square
+      for (const s2 of [1, -1]) {
         for (let i = 0; i <= 14; i++) {
           const f = i / 14;
-          const sag = Math.sin(f * Math.PI * 3) ** 2 * 0.45;
-          const p = new THREE.Vector3(-w / 2 + f * w, eave - 0.2 - sag, s * (d / 2 + 0.1)).applyMatrix4(g.matrixWorld);
-          addBulb(c.id, p, 0.28, 0.05 + f * 0.8, i % 3 === 0 ? new THREE.Color(2.4, 1.0, 0.5) : WARM);
+          const sag = Math.sin(f * Math.PI) * 0.9;
+          const p = new THREE.Vector3(-w / 2 + 6 + f * (w - 6.5), 4.3 - sag, s2 * 0.3 + (s2 > 0 ? 2.6 : -2.0)).applyMatrix4(g.matrixWorld);
+          addBulb(c.id, p, 0.24, 0.05 + f * 0.8, i % 3 === 0 ? new THREE.Color(2.4, 1.0, 0.5) : WARM);
         }
       }
+      shop.updateMatrixWorld(true);
+      facadeWindows(c.id, shop, 6, 5, 4.7, 1, 2, 2, 1.1, 1.0, (face, lx) => face === 'front' && lx > 0.4);
       addPool(c.id, c.x, c.z, 30, '#ffb36b', 0.22);
     }
     buildings[c.id] = { group: g, height, c };
@@ -513,8 +542,14 @@ export function createWorld(scene, map) {
   root.add(depG);
   block(root, dep.w + 16, 0.3, dep.d + 10, mat(PAL.concrete), dep.x + 5, 0.15, dep.z - 1, { r: 0.12, cast: false });
   block(depG, dep.w, 5.6, dep.d, mat('#e6d2a6'), 0, 3.1, 0, { r: 0.35 });
-  block(depG, dep.w + 0.4, 0.6, dep.d + 0.4, mat('#cbb994'), 0, 6.0, 0, { r: 0.2 });
-  block(depG, dep.w - 0.6, 0.2, dep.d - 0.6, mat('#4b4744'), 0, 6.2, 0, { r: 0.05, cast: false });
+  const dpar = mat('#cbb994');
+  block(depG, dep.w + 0.4, 0.8, 0.5, dpar, 0, 6.2, dep.d / 2 - 0.05, { r: 0.15 }); // parapet ring
+  block(depG, dep.w + 0.4, 0.8, 0.5, dpar, 0, 6.2, -dep.d / 2 + 0.05, { r: 0.15 });
+  block(depG, 0.5, 0.8, dep.d, dpar, dep.w / 2 - 0.05, 6.2, 0, { r: 0.15 });
+  block(depG, 0.5, 0.8, dep.d, dpar, -dep.w / 2 + 0.05, 6.2, 0, { r: 0.15 });
+  block(depG, dep.w - 0.4, 0.14, dep.d - 0.4, mat('#56514c', { roughness: 1 }), 0, 5.95, 0, { r: 0.04, cast: false }); // roof deck
+  block(depG, 2.6, 1.2, 2.0, mat(PAL.steel, { metalness: 0.3 }), -4, 6.5, -2, { r: 0.18 });
+  block(depG, 3.4, 0.4, 2.2, mat('#bfe2ea', { roughness: 0.2, metalness: 0.2 }), 4, 6.15, 1, { r: 0.1 });
   const roller = new THREE.MeshStandardMaterial({ map: ribTexture('#9ea5aa'), roughness: 0.55, metalness: 0.25 });
   for (const dx of [-4.2, 2.6]) block(depG, 5.2, 4.0, 0.3, roller, dx, 2.3, dep.d / 2 + 0.05, { r: 0.08, cast: false });
   block(depG, 1.2, 2.4, 0.25, mat('#3d4f5c'), 7.2, 1.5, dep.d / 2 + 0.05, { r: 0.06, cast: false });
@@ -674,7 +709,7 @@ export function createWorld(scene, map) {
       const wm = mat(PAL.walls[i % PAL.walls.length]);
       const wh = 4 + R() * 2.5;
       block(hg, 9, wh, 7, wm, 0, wh / 2, 0, { r: 0.3 });
-      gable(hg, 9, 7, wh, 2.8, wm, mat(PAL.roofs[i % PAL.roofs.length], { roughness: 0.7 }), 0.7);
+      gable(hg, 9, 7, wh, 2.8, wm, roof(PAL.roofs[i % PAL.roofs.length]), 0.7);
       hg.updateMatrixWorld(true);
       for (let k = 0; k < 4; k++) {
         const p = new THREE.Vector3(-2.5 + (k % 2) * 5, 1.6 + Math.floor(k / 2) * 2.2, 3.6).applyMatrix4(hg.matrixWorld);
@@ -687,7 +722,7 @@ export function createWorld(scene, map) {
     root.add(ch);
     const cw = mat('#f1e4c6');
     block(ch, 14, 7, 9, cw, 0, 3.5, 0, { r: 0.3 });
-    gable(ch, 14, 9, 7, 4.2, cw, mat('#cf5a2c', { roughness: 0.7 }), 0.6);
+    gable(ch, 14, 9, 7, 4.2, cw, roof('#cf5a2c'), 0.6);
     block(ch, 4, 14, 4, cw, -8, 7, 0, { r: 0.25 });
     const spire = new THREE.Mesh(new THREE.ConeGeometry(3.0, 7, 4), mat('#c8502b'));
     spire.position.set(-8, 17.5, 0);
@@ -734,7 +769,7 @@ export function createWorld(scene, map) {
     root.add(bg);
     const red = mat('#b33a2e');
     block(bg, 14, 7, 11, red, 0, 3.5, 0, { r: 0.3 });
-    gable(bg, 14, 11, 7, 4, red, mat('#6b4a36'), 0.6);
+    gable(bg, 14, 11, 7, 4, red, roof('#6b4a36'), 0.6);
     block(bg, 4.4, 5, 0.3, mat('#f4ead6'), 0, 2.6, 5.6, { r: 0.08 });
     cyl(bg, 3, 3, 15, mat('#d8cfbf'), -10, 7.5, -2, 20);
     const dome = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat('#9aa0a6', { metalness: 0.3 }));
@@ -880,7 +915,7 @@ export function createWorld(scene, map) {
       let on = L.lit && g.level > L.thr;
       if (on && g.partial && !reduceMotion && (L.idx * 31 + flick) % 11 === 0) on = false;
       const off = L.mesh === 'win' ? glass : bulbOff;
-      const target = on ? col.copy(L.color).multiplyScalar(0.45 + 0.55 * nk) : off;
+      const target = on ? (L.mesh === 'win' ? col.copy(GLASS_DAY).lerp(WARM_DIM.copy(L.color).multiplyScalar(0.55), 0.2 + 0.8 * nk).lerp(L.color, nk * nk) : col.copy(L.color).multiplyScalar(0.45 + 0.55 * nk)) : off;
       (L.mesh === 'win' ? winMesh : bulbMesh).setColorAt(L.idx, target);
     }
     for (const t of turbines) {

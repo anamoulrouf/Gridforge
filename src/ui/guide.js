@@ -128,7 +128,8 @@ export function objectiveGuide(state, bal, id, ctx = {}) {
       now.push(g.status === 'running' ? ok(`Generator running · ${fmt.kw(f.genKW || 0)} of ${Math.round(f.availKW || 0)} kW available`) : todo(`Generator: <b>${label}</b>${g.status === 'off' ? ' — click it and press <b>Start</b>' : ''}`));
       if (!(f.connected > 0)) now.push(warn('No building is connected yet — power needs somewhere to go'));
       else if (g.status === 'running' && !(f.powered > 0)) now.push(warn('Running, but no building receives power — check the transformer and 400 V lines'));
-      if (f.deficitKW > 0.01) now.push(warn(`Supply short by <b>${fmt.kw(f.deficitKW)}</b> — some customers are being shed`));
+      if (g.status === 'starting') now.push(info(`Ramping up — ${Math.round(f.availKW || 0)} of ${bal.generator.maxKW} kW available so far; customers come on as output rises`));
+      else if (f.deficitKW > 0.01) now.push(warn(`Supply short by <b>${fmt.kw(f.deficitKW)}</b> — some customers are being shed`));
       else if (f.powered > 0) now.push(ok(`Demand met · ${f.powered} customer${f.powered > 1 ? 's' : ''} powered`));
       now.push(info(`Fuel ${Math.floor(g.fuel)} units (≈ 1 unit per ${bal.generator.kWhPerFuel} kWh)`));
       return {
@@ -224,15 +225,16 @@ export function objectiveGuide(state, bal, id, ctx = {}) {
     }
 
     case 'service': {
-      const peak = hourOfDay >= 17 && hourOfDay <= 22;
-      const goodTime = (f.townDemandKW || 0) < bal.generator.servicingCapKW * 0.9 && !peak;
+      const peak = hourOfDay >= 18 && hourOfDay <= 22;
+      const soon = hourOfDay === 16 || hourOfDay === 17;
+      const goodTime = (f.townDemandKW || 0) < bal.generator.servicingCapKW * 0.9 && !peak && !soon;
       return {
         title: 'Optional · Service the generator',
         why: `Running wears the generator down. Below 50% condition it burns about 20% more fuel.`,
         steps: [`Click the <b>generator</b>.`, `Press <b>Service</b> — ${bal.costs.maintain} ¢. Output is limited to ${bal.generator.servicingCapKW} kW for ${bal.crew.maintainH} h.`, `Do it in the daytime, when demand is under ${bal.generator.servicingCapKW} kW — never during the 18:00–22:00 peak.`],
         now: [
           r.done ? ok('Generator serviced') : todo(`Condition <b>${Math.round(g.condition)}%</b>`),
-          g.status !== 'running' ? info('Start the generator first') : goodTime ? ok(`Good time now — demand ${fmt.kw(f.townDemandKW || 0)} is under the ${bal.generator.servicingCapKW} kW cap`) : warn(`Not now — demand ${fmt.kw(f.townDemandKW || 0)}${peak ? ' during the evening peak' : ''}`),
+          g.status !== 'running' ? info('Start the generator first') : goodTime ? ok(`Good time now — demand ${fmt.kw(f.townDemandKW || 0)} is under the ${bal.generator.servicingCapKW} kW cap`) : warn(peak ? `Not now — evening peak (18:00–22:00), demand ${fmt.kw(f.townDemandKW || 0)}` : soon ? `Wait — the evening peak starts at 18:00 and servicing lasts ${bal.crew.maintainH} h` : `Not now — demand ${fmt.kw(f.townDemandKW || 0)} is near the ${bal.generator.servicingCapKW} kW cap`),
         ],
         focus: genFocus,
         focusLabel: 'Show generator',

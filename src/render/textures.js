@@ -258,3 +258,25 @@ export function ribTexture(base = '#9aa1a6') {
     }
   });
 }
+
+/** Clay roof tiles: rows parallel to the ridge with staggered seams (white-balanced; tint via colour). */
+export function roofTileTexture() {
+  return canvasTex('rooftile', 256, 256, (g, S) => {
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, S, S);
+    const rows = 12;
+    const rh = S / rows;
+    for (let r = 0; r < rows; r++) {
+      const y = r * rh;
+      const grd = g.createLinearGradient(0, y, 0, y + rh);
+      grd.addColorStop(0, 'rgba(255,255,255,0)');
+      grd.addColorStop(0.75, 'rgba(0,0,0,0.10)');
+      grd.addColorStop(1, 'rgba(0,0,0,0.30)');
+      g.fillStyle = grd;
+      g.fillRect(0, y, S, rh);
+      const off = r % 2 ? rh * 0.7 : 0;
+      g.fillStyle = 'rgba(0,0,0,0.13)';
+      for (let x = off; x < S; x += rh * 1.4) g.fillRect(x, y + 2, 2, rh - 3);
+    }
+  });
+}

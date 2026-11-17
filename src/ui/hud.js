@@ -86,7 +86,7 @@ export function createHud(ui, labelsEl, cb) {
       `<h4>${esc(gd.title)}</h4><p class="oc-why">${gd.why}</p>` +
       `<div class="oc-sec">How to complete</div><ol class="oc-steps">${gd.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` +
       `<div class="oc-sec">Right now</div><ul class="oc-now">${gd.now.map((n) => `<li class="${n.cls}"><i></i><span>${n.html}</span></li>`).join('')}</ul>` +
-      (gd.tip ? `<div class="oc-tip">${icon('info')}<span>${gd.tip}</span></div>` : '') +
+      (gd.tip && !done ? `<div class="oc-tip">${icon('info')}<span>${gd.tip}</span></div>` : '') +
       (gd.focus ? `<div class="oc-acts"><button class="btn small primary" data-focus="1">${icon('eye')}${esc(gd.focusLabel || 'Show me')}</button></div>` : '');
     if (html !== card.html) {
       card.html = html;
@@ -322,7 +322,7 @@ export function createHud(ui, labelsEl, cb) {
     compassBtn.querySelector('svg').style.transform = `rotate(${deg}deg)`;
   }
   const LEG = {
-    flow: [['#ffcf3a', 'Energised 400 V'], ['repeating-linear-gradient(0deg,#ffe9a8 0 2px,transparent 2px 4px)', 'Energised 11 kV (double)'], ['repeating-linear-gradient(90deg,#4a4038 0 5px,transparent 5px 8px)', 'Dead (dashed)']],
+    flow: [['#ffcf3a', 'Energised 400 V'], ['repeating-linear-gradient(0deg,#f0c860 0 2px,transparent 2px 4px)', 'Energised 11 kV (double)'], ['repeating-linear-gradient(90deg,#4a4038 0 5px,transparent 5px 8px)', 'Dead (dashed)']],
     capacity: [['#74d36b', '< 60% load'], ['#ff9f3a', '85–100%'], ['#ff5a4e', 'Overloaded']],
     tier: [['#ff8a4a', '11 kV (MV)'], ['#ffcf3a', '400 V (LV)']],
     condition: [['#74d36b', 'Good > 70%'], ['#ff9f3a', 'Worn 40–70%'], ['#ff5a4e', 'Poor < 40%']],

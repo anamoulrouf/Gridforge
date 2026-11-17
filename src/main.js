@@ -1353,7 +1353,7 @@ function frame() {
 
   // --- visuals
   net.sync(st);
-  net.update(st, { overlay: app.mode === 'game' ? app.overlay : 'flow', time, dt, reduceMotion: cfg.reduceMotion, cb: cfg.cbPatterns, bal });
+  net.update(st, { overlay: app.mode === 'game' ? app.overlay : 'flow', time, dt, reduceMotion: cfg.reduceMotion, cb: cfg.cbPatterns, bal, night: app.nightK });
   world.update(dt, time, nightK, cfg.reduceMotion);
   people.update(st, dt, time, nightK, cfg.reduceMotion, siteOf);
   const g = st.gen;

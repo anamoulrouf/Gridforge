@@ -9,7 +9,7 @@ const H = { MV: 9.8, LV: 7.6, port: 4.4 };
 // Energised network = electric sunflower yellow (matches the hazard-sign accent of the art refs).
 export const COL = {
   cyan: new THREE.Color(1.25, 0.86, 0.12), // energised 400 V
-  mv: new THREE.Color(1.35, 1.12, 0.6), // energised 11 kV (paler, drawn double)
+  mv: new THREE.Color(1.15, 0.92, 0.38), // energised 11 kV (gold, drawn double)
   lv: new THREE.Color(1.25, 0.86, 0.12),
   tierMV: new THREE.Color(1.3, 0.42, 0.1),
   dead: new THREE.Color(0.11, 0.09, 0.075),
@@ -376,11 +376,12 @@ export function createNetworkView(scene, map) {
       else if (overlay === 'condition') c = COL.dead;
       else c = e.kind === 'line' && e.tier === 'MV' ? COL.mv : COL.cyan;
       if (!e.energized && overlay !== 'tier') c = tmp.copy(COL.dead);
-      u.uColor.value.copy(c);
       u.uDash.value = dash || (cb && overlay === 'capacity' && ratio >= 0.85) ? 1 : 0;
       u.uSpeed.value = e.kind === 'drop' ? 6 : 14;
-      u.uOpacity.value = overlay === 'condition' ? 0.35 : !e.energized ? 0.7 : overlay === 'flow' ? 0.62 : 0.95;
-      v.wireMat.emissiveIntensity = v.energy * (overlay === 'flow' ? 1.25 : 0.4);
+      const nk = THREE.MathUtils.clamp(((opts.night ?? 1) - 0.3) / 0.7, 0, 1);
+      u.uColor.value.copy(c).multiplyScalar(e.energized && overlay === 'flow' ? 0.55 + 0.45 * nk : 1);
+      u.uOpacity.value = overlay === 'condition' ? 0.35 : !e.energized ? 0.7 : overlay === 'flow' ? 0.4 + 0.25 * nk : 0.95;
+      v.wireMat.emissiveIntensity = v.energy * (overlay === 'flow' ? 0.55 + 0.75 * nk : 0.4);
       // grow-in animation for new builds
       const age = (performance.now() - (v.born || 0)) / 1000;
       if (age < 0.6 && !reduceMotion) v.group.scale.setScalar(1);
@@ -400,7 +401,8 @@ export function createNetworkView(scene, map) {
       else if (overlay === 'tier') c = tier === 'MV' ? COL.tierMV : COL.lv;
       else if (overlay === 'capacity' && n.kind === 'xfmr') c = loadColor(n.loadPct / 100);
       else c = n.energized ? (tier === 'MV' ? COL.mv : COL.cyan) : COL.dead;
-      v.dotMat.color.copy(c).multiplyScalar(n.energized ? 1.6 : 1);
+      const nkd = THREE.MathUtils.clamp(((opts.night ?? 1) - 0.3) / 0.7, 0, 1);
+      v.dotMat.color.copy(c).multiplyScalar(n.energized ? 0.55 + 1.05 * nkd : 1);
       v.dotMat.opacity = n.energized || overlay !== 'flow' ? 1 : 0.0;
       if (v.ringMat) {
         let rc;
