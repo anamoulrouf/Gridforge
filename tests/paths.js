@@ -91,7 +91,7 @@ async (page) => {
   // 4. Single transformer → forecast + overload + trip → reset (Balance)
   R.connected = await buildRef(true);
   await click('gen');
-  await page.getByRole('button', { name: 'Start' }).click();
+  await page.locator('#inspector').getByRole('button', { name: 'Start', exact: true }).click();
   await page.waitForTimeout(600);
   R.forecastAlert = (await page.locator('.alert', { hasText: 'forecast' }).count()) > 0;
   await shot('05-forecast');
@@ -153,7 +153,7 @@ async (page) => {
   // 7. Fail path: fuel starvation → warning → fail screen → Retry
   await buildRef(false);
   await click('gen');
-  await page.getByRole('button', { name: 'Start' }).click();
+  await page.locator('#inspector').getByRole('button', { name: 'Start', exact: true }).click();
   await page.keyboard.press('Escape');
   for (let i = 0; i < 400 && !(await ev(() => !!__gf.state().result)); i++) {
     await ev(() => __gf.skipHours(1));

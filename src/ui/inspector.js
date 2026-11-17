@@ -60,7 +60,7 @@ export function createInspector(ui, cb) {
       const total = (hh) => state.map.customers.reduce((s, c) => s + demandAt(bal, c.type, hh), 0);
       const vals = Array.from({ length: 24 }, (_, i) => total(i));
       const mx = Math.max(...vals);
-      const bars = vals.map((v, i) => `<rect x="${i * 12 + 1}" y="${70 - (v / mx) * 62}" width="10" height="${(v / mx) * 62}" rx="2" fill="${i === hour ? '#d4ff3a' : v === mx ? '#ffb547' : '#3fd8ff'}" opacity="${i === hour ? 1 : 0.65}"/>`).join('');
+      const bars = vals.map((v, i) => `<rect x="${i * 12 + 1}" y="${70 - (v / mx) * 62}" width="10" height="${(v / mx) * 62}" rx="2" fill="${i === hour ? '#ffc63a' : v === mx ? '#ff9f3a' : '#e8d3a8'}" opacity="${i === hour ? 1 : 0.65}"/>`).join('');
       const byType = ['home', 'school', 'market', 'clinic'].map((t) => {
         const cs = state.map.customers.filter((c) => c.type === t);
         return [`${CUSTOMER_TYPES[t].label}${cs.length > 1 ? 's' : ''} (${cs.length})`, `${fmt.kw(cs.reduce((s, c) => s + demandAt(bal, c.type, hour), 0))} <span style="color:var(--muted)">/ ${cs.length * CUSTOMER_TYPES[t].nominal} nom.</span>`];
@@ -68,7 +68,7 @@ export function createInspector(ui, cb) {
       return (
         head('home', 'Town demand', 'All 13 customers') +
         kv([['Demand now', fmt.kw(state.flow.townDemandKW)], ['Nominal total', '40 kW'], ['Evening peak (18–19 h)', `<span style="color:var(--amber)">${fmt.kw(mx)}</span>`], ['Energy per day', fmt.kwh(vals.reduce((a, b) => a + b, 0))]]) +
-        `<svg viewBox="0 0 288 84" style="width:100%;margin:6px 0 2px" role="img" aria-label="Demand by hour">${bars}<text x="0" y="82" font-size="8" fill="#8fa3bb">0h</text><text x="138" y="82" font-size="8" fill="#8fa3bb">12h</text><text x="270" y="82" font-size="8" fill="#8fa3bb">23h</text></svg>` +
+        `<svg viewBox="0 0 288 84" style="width:100%;margin:6px 0 2px" role="img" aria-label="Demand by hour">${bars}<text x="0" y="82" font-size="8" fill="#c2b29c">0h</text><text x="138" y="82" font-size="8" fill="#c2b29c">12h</text><text x="270" y="82" font-size="8" fill="#c2b29c">23h</text></svg>` +
         kv(byType) +
         `<div class="note">Homes use 2.5× more in the evening; the school and market run by day; the clinic never stops. Size transformers for the <b>peak</b>, not the average.</div>`
       );

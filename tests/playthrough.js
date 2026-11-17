@@ -106,7 +106,7 @@ async (page) => {
 
   // --- Start the generator via the inspector button → first light
   await click('gen');
-  await page.getByRole('button', { name: 'Start' }).click();
+  await page.locator('#inspector').getByRole('button', { name: 'Start', exact: true }).click();
   await step('start');
   await page.waitForTimeout(3200);
   await shot('05-first-light');

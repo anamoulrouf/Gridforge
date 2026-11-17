@@ -1,9 +1,9 @@
 // Characters, learning panels (GDD §12 template), reactive lines and ending narration (§13).
 
 export const CAST = {
-  advisor: { name: 'Grid Advisor', role: 'AI operations assistant', color: '#3fd8ff', initials: 'GA' },
-  sofia: { name: 'Sofia Reyes', role: 'Chief grid engineer', color: '#ffb547', initials: 'SR' },
-  daniel: { name: 'Daniel Carter', role: 'Financial advisor', color: '#47e39a', initials: 'DC' },
+  advisor: { name: 'Grid Advisor', role: 'AI operations assistant', color: '#7cc4f0', initials: 'GA' },
+  sofia: { name: 'Sofia Reyes', role: 'Chief grid engineer', color: '#ff9f3a', initials: 'SR' },
+  daniel: { name: 'Daniel Carter', role: 'Financial advisor', color: '#74d36b', initials: 'DC' },
   maya: { name: 'Maya Rahman', role: 'Community representative', color: '#ff7eb6', initials: 'MR' },
 };
 

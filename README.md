@@ -1,6 +1,6 @@
 # Gridforge — Stage 1 "Light the First District"
 
-A 3D electricity-network strategy game built from `reso/Gridforge_Game_Design_Document.html`, styled after `reso/norva-staffing-hero.mp4`.
+A 3D electricity-network strategy game built from `reso/Gridforge_Game_Design_Document.html`, in the warm toy-diorama art style of `reso/graphic/`. Hover any objective in the left rail for step-by-step help and a live status read-out.
 
 **Play:** open `dist/gridforge.html` in a modern browser. It's a single offline file (no network, no external assets).
 

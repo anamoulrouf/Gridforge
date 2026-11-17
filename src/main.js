@@ -129,6 +129,12 @@ const hud = createHud(uiEl, labelsEl, {
   onTool: (t) => setTool(t),
   onOverlay: () => cycleOverlay(),
   onResetCamera: () => rig.reset(),
+  xfmrName: (id) => xfmrName(id),
+  onFocusObjective: (f) => {
+    audio.play('click');
+    if (f.sel) focus(f.sel);
+    else rig.flyTo(f.x, f.z, Math.min(rig.distGoal, 200));
+  },
 });
 const inspector = createInspector(uiEl, { onAction: (a) => doAction(a) });
 const menus = createMenus(uiEl);
@@ -494,6 +500,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.preventDefault();
     if (menus.isOpen()) return void menus.closeTop();
+    if (hud.closeObjCard()) return;
     if (app.lineStart) {
       app.lineStart = null;
       net.showGhost(null);
@@ -1206,8 +1213,18 @@ function startEnding(sim) {
   world.setGroupLevel('street-s', 1);
   const t0 = performance.now() / 1000;
   rig.cinematic = (t) => {
-    const k = (t - t0) / 60;
-    return { target: new THREE.Vector3(20 - k * 10, 0, 4), yaw: 2.3 + (t - t0) * (cfg.reduceMotion ? 0.006 : 0.03), pitch: 0.62 - Math.min(0.2, k * 0.4), dist: 260 - Math.min(90, (t - t0) * 3) };
+    // close orbit over the lit town, then pull back to reveal the whole diorama and the
+    // neighbouring islands (wind farm, power station, next town) that later stages unlock.
+    const d = t - t0;
+    const k = d / 60;
+    const out = Math.min(1, Math.max(0, (d - 18) / 16));
+    const e = out * out * (3 - 2 * out);
+    return {
+      target: new THREE.Vector3(20 - k * 10 + e * 10, 0, 4 - e * 40),
+      yaw: 2.3 + d * (cfg.reduceMotion ? 0.006 : 0.03),
+      pitch: 0.62 - Math.min(0.2, k * 0.4) + e * 0.32,
+      dist: 260 - Math.min(90, d * 3) + e * 560,
+    };
   };
   fireflies.on = true;
   const score = sim.state.result?.score || { ending: 'reliable', total: 0 };
@@ -1241,13 +1258,15 @@ const smoke = fx.addEmitter({
   rate: 0,
   make: () => {
     const p = world.generator.stackTop;
-    return { x: p.x + (Math.random() - 0.5) * 0.4, y: p.y, z: p.z, vx: 0.6 + Math.random() * 0.5, vy: 2.6 + Math.random(), vz: (Math.random() - 0.5) * 0.6, g: 0, life: 3.2, s0: 1.4, s1: 5, c: new THREE.Color(0.16, 0.18, 0.22), fade: 0 };
+    const p2 = Math.random() < 0.5 ? world.generator.stackTop : world.generator.stackTop2 || p;
+    const q = Math.random() < 0.5 ? p : p2;
+    return { puff: true, x: q.x + (Math.random() - 0.5) * 0.6, y: q.y, z: q.z + (Math.random() - 0.5) * 0.6, vx: 0.7 + Math.random() * 0.6, vy: 2.4 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.6, g: 0, life: 4.2, s0: 1.8, s1: 6.5, c: new THREE.Color(0.86, 0.84, 0.8), opacity: 0.9, fade: 0 };
   },
 });
 for (const ct of world.coolingTowers) {
   fx.addEmitter({
     rate: 6,
-    make: () => ({ x: ct.x + (Math.random() - 0.5) * ct.r, y: ct.top, z: ct.z + (Math.random() - 0.5) * ct.r, vx: 1.2, vy: 4 + Math.random() * 2, vz: 0.3, g: 0, life: 6, s0: 8, s1: 22, c: new THREE.Color(0.2, 0.26, 0.34), fade: 0 }),
+    make: () => ({ puff: true, x: ct.x + (Math.random() - 0.5) * ct.r, y: ct.top, z: ct.z + (Math.random() - 0.5) * ct.r, vx: 1.4, vy: 3.5 + Math.random() * 2, vz: 0.3, g: 0, life: 7, s0: 9, s1: 26, c: new THREE.Color(0.92, 0.91, 0.88), opacity: 0.92, fade: 0 }),
   });
 }
 const fireflies = fx.addEmitter({
@@ -1255,7 +1274,7 @@ const fireflies = fx.addEmitter({
   make: () => {
     const c = map.customers[Math.floor(Math.random() * map.customers.length)];
     const warm = Math.random() < 0.5;
-    return { x: c.x + (Math.random() - 0.5) * 30, y: 1 + Math.random() * 3, z: c.z + (Math.random() - 0.5) * 30, vx: (Math.random() - 0.5) * 0.6, vy: 1 + Math.random() * 1.5, vz: (Math.random() - 0.5) * 0.6, g: 0, life: 4, s0: 1.1, s1: 0.3, c: warm ? new THREE.Color(2.2, 1.4, 0.5) : new THREE.Color(0.4, 1.6, 2.4), fade: 0 };
+    return { x: c.x + (Math.random() - 0.5) * 30, y: 1 + Math.random() * 3, z: c.z + (Math.random() - 0.5) * 30, vx: (Math.random() - 0.5) * 0.6, vy: 1 + Math.random() * 1.5, vz: (Math.random() - 0.5) * 0.6, g: 0, life: 4, s0: 1.1, s1: 0.3, c: warm ? new THREE.Color(2.2, 1.4, 0.5) : new THREE.Color(2.0, 1.8, 0.7), fade: 0 };
   },
 });
 fireflies.on = false;

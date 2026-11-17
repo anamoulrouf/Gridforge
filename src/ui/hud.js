@@ -4,6 +4,8 @@ import { h, icon, esc } from './dom.js';
 import { S, fmt } from '../data/strings.js';
 import { CAST } from '../data/dialogue.js';
 import { OBJECTIVES, evalObjective } from '../sim/mission.js';
+import { BALANCE } from '../data/balance.js';
+import { objectiveGuide } from './guide.js';
 
 export function createHud(ui, labelsEl, cb) {
   // ---------------------------------------------------------------- top bar
@@ -42,7 +44,10 @@ export function createHud(ui, labelsEl, cb) {
 
   // ---------------------------------------------------------------- objectives
   const objList = h('div');
-  const objectives = h('aside', { id: 'objectives', class: 'glass', hidden: true, 'aria-label': 'Objectives' }, h('div', { class: 'panel-title', html: `<span>${S.stageName}</span>` }), h('div', { class: 'mission-name', text: S.missionName }), objList);
+  const objectives = h('aside', { id: 'objectives', class: 'glass', hidden: true, 'aria-label': 'Objectives' }, h('div', { class: 'panel-title', html: `<span>${S.stageName}</span>` }), h('div', { class: 'mission-name', text: S.missionName }), h('div', { class: 'obj-help', html: `${icon('info')}Hover an objective for step-by-step help` }), objList);
+  // Hover / focus card with the full "how to complete" guide for one objective.
+  const objCard = h('div', { id: 'objcard', class: 'glass', role: 'tooltip', hidden: true });
+  const card = { id: null, pinned: false, row: null, hideT: null, html: '', state: null };
 
   // ---------------------------------------------------------------- toolbar + inventory + hint
   const tools = ['select', 'line', 'xfmr', 'drop', 'remove'];
@@ -66,10 +71,97 @@ export function createHud(ui, labelsEl, cb) {
   const alerts = h('div', { id: 'alerts', 'aria-live': 'polite' });
   const comms = h('div', { id: 'comms', 'aria-live': 'polite' });
   const captions = h('div', { id: 'captions', 'aria-live': 'polite' });
-  const compassBtn = h('button', { id: 'compass', class: 'glass', title: 'North · click to reset the camera (Home)', 'aria-label': 'Reset camera', html: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="none" stroke="rgba(130,190,255,.3)"/><path d="M12 3 8.5 12h7z" fill="#ff5468"/><path d="M12 21 8.5 12h7z" fill="#8fa3bb"/><text x="12" y="2.6" font-size="3" text-anchor="middle" fill="#fff">N</text></svg>`, onclick: () => cb.onResetCamera() });
+  const compassBtn = h('button', { id: 'compass', class: 'glass', title: 'North · click to reset the camera (Home)', 'aria-label': 'Reset camera', html: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="none" stroke="rgba(255,228,188,.3)"/><path d="M12 3 8.5 12h7z" fill="#ff5a4e"/><path d="M12 21 8.5 12h7z" fill="#c2b29c"/><text x="12" y="2.6" font-size="3" text-anchor="middle" fill="#fff">N</text></svg>`, onclick: () => cb.onResetCamera() });
   const legend = h('div', { id: 'overlay-legend', class: 'glass', hidden: true });
   const tip = h('div', { id: 'cursor-tip', class: 'glass', hidden: true });
-  ui.append(topbar, objectives, inventory, hint, toolbar, alerts, comms, captions, compassBtn, legend, tip);
+  // ---------------------------------------------------------------- objective card behaviour
+  function renderCard() {
+    const st = card.state;
+    if (!st || !card.id) return;
+    const gd = objectiveGuide(st, BALANCE, card.id, { xfmrName: cb.xfmrName });
+    const r = evalObjective(st, card.id);
+    const done = card.id === 'losses' ? r.done : st.objectives[card.id];
+    const html =
+      `<div class="oc-head"><span class="oc-state ${done ? 'done' : ''}">${done ? icon('check') + 'Done' : 'To do'}</span>${card.pinned ? '<span class="oc-pin">Pinned · Esc to close</span>' : ''}</div>` +
+      `<h4>${esc(gd.title)}</h4><p class="oc-why">${gd.why}</p>` +
+      `<div class="oc-sec">How to complete</div><ol class="oc-steps">${gd.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` +
+      `<div class="oc-sec">Right now</div><ul class="oc-now">${gd.now.map((n) => `<li class="${n.cls}"><i></i><span>${n.html}</span></li>`).join('')}</ul>` +
+      (gd.tip ? `<div class="oc-tip">${icon('info')}<span>${gd.tip}</span></div>` : '') +
+      (gd.focus ? `<div class="oc-acts"><button class="btn small primary" data-focus="1">${icon('eye')}${esc(gd.focusLabel || 'Show me')}</button></div>` : '');
+    if (html !== card.html) {
+      card.html = html;
+      objCard.innerHTML = html;
+      card.focus = gd.focus;
+    }
+    place();
+  }
+  function place() {
+    if (!card.row || !card.row.isConnected) card.row = objList.querySelector(`[data-obj="${card.id}"]`);
+    const rb = objectives.getBoundingClientRect();
+    const rr = card.row ? card.row.getBoundingClientRect() : rb;
+    objCard.style.left = rb.right + 10 + 'px';
+    const hgt = objCard.offsetHeight;
+    objCard.style.top = Math.max(70, Math.min(window.innerHeight - hgt - 12, rr.top - 12)) + 'px';
+  }
+  function openCard(id, row, pin = false) {
+    clearTimeout(card.hideT);
+    if (card.id !== id) card.html = '';
+    card.id = id;
+    card.row = row;
+    if (pin) card.pinned = true;
+    objCard.hidden = false;
+    for (const r of objList.querySelectorAll('.obj')) r.classList.toggle('hover', r.dataset.obj === id);
+    renderCard();
+  }
+  function closeCard(force = false) {
+    if (card.pinned && !force) return;
+    clearTimeout(card.hideT);
+    card.id = null;
+    card.pinned = false;
+    card.html = '';
+    objCard.hidden = true;
+    for (const r of objList.querySelectorAll('.obj.hover')) r.classList.remove('hover');
+  }
+  const softClose = () => {
+    clearTimeout(card.hideT);
+    card.hideT = setTimeout(() => closeCard(), 220);
+  };
+  const rowOf = (e) => e.target.closest?.('.obj[data-obj]');
+  objList.addEventListener('mouseover', (e) => {
+    const r = rowOf(e);
+    if (r && !(card.pinned && card.id !== r.dataset.obj)) openCard(r.dataset.obj, r);
+  });
+  objList.addEventListener('mouseleave', softClose);
+  objList.addEventListener('focusin', (e) => {
+    const r = rowOf(e);
+    if (r) openCard(r.dataset.obj, r);
+  });
+  objList.addEventListener('focusout', (e) => !objCard.contains(e.relatedTarget) && softClose());
+  objList.addEventListener('click', (e) => {
+    const r = rowOf(e);
+    if (!r) return;
+    if (card.pinned && card.id === r.dataset.obj) return closeCard(true);
+    card.pinned = false;
+    openCard(r.dataset.obj, r, true);
+  });
+  objList.addEventListener('keydown', (e) => {
+    const r = rowOf(e);
+    if (r && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      r.click();
+    }
+  });
+  objCard.addEventListener('mouseenter', () => clearTimeout(card.hideT));
+  objCard.addEventListener('mouseleave', softClose);
+  objCard.addEventListener('click', (e) => {
+    if (e.target.closest('[data-focus]') && card.focus) cb.onFocusObjective?.(card.focus);
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (card.pinned && !objCard.contains(e.target) && !objList.contains(e.target)) closeCard(true);
+  });
+
+  ui.append(topbar, objectives, objCard, inventory, hint, toolbar, alerts, comms, captions, compassBtn, legend, tip);
 
   const gameEls = [topbar, objectives, toolbar, inventory, compassBtn];
   function show(on) {
@@ -77,6 +169,7 @@ export function createHud(ui, labelsEl, cb) {
     hint.style.display = on ? '' : 'none';
     alerts.style.display = comms.style.display = on ? '' : 'none';
     if (!on) {
+      closeCard(true);
       legend.hidden = true;
       tip.hidden = true;
       labelsEl.innerHTML = '';
@@ -94,7 +187,7 @@ export function createHud(ui, labelsEl, cb) {
     if (barPct != null) {
       const b = c.querySelector('.bar i');
       b.style.width = Math.max(0, Math.min(100, barPct)) + '%';
-      b.style.background = cls === 'bad' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : 'var(--cyan)';
+      b.style.background = cls === 'bad' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : 'var(--power)';
     }
   }
   function update(state, ux) {
@@ -134,14 +227,25 @@ export function createHud(ui, labelsEl, cb) {
         objList.append(
           h(
             'div',
-            { class: `obj ${x.done ? 'done' : ''} ${cur && cur.o.id === x.o.id ? 'current' : ''} ${x.o.primary ? '' : 'optional'}` },
+            {
+              class: `obj ${x.done ? 'done' : ''} ${cur && cur.o.id === x.o.id ? 'current' : ''} ${x.o.primary ? '' : 'optional'} ${card.id === x.o.id ? 'hover' : ''}`,
+              tabindex: '0',
+              role: 'button',
+              'data-obj': x.o.id,
+              'aria-describedby': 'objcard',
+              'aria-label': `${S.objectives[x.o.id]}${x.done ? ' (done)' : ''}. Show how to complete it.`,
+            },
             h('div', { class: 'box', html: x.done ? icon('check') : '' }),
             h('div', { style: { flex: 1 } }, S.objectives[x.o.id], showBar ? h('div', { class: 'pbar', html: `<i style="width:${(p[0] / p[1]) * 100}%"></i>` }) : null),
             p && !x.done ? h('span', { class: 'prog', text: x.o.id === 'stable' ? `${p[0]} / ${p[1]} h` : `${p[0]}/${p[1]}` }) : null,
+            h('span', { class: 'more', html: icon('info') }),
           ),
         );
       });
+      if (card.id) card.row = objList.querySelector(`[data-obj="${card.id}"]`);
     }
+    card.state = state;
+    if (card.id) renderCard();
 
     // inventory
     const inv = state.inv;
@@ -218,11 +322,11 @@ export function createHud(ui, labelsEl, cb) {
     compassBtn.querySelector('svg').style.transform = `rotate(${deg}deg)`;
   }
   const LEG = {
-    flow: [['#3fd8ff', 'Energised 400 V'], ['#8ab8ff', 'Energised 11 kV'], ['#2c3a4a', 'Dead (dashed)']],
-    capacity: [['#47e39a', '< 60% load'], ['#ffb547', '85–100%'], ['#ff5468', 'Overloaded']],
-    tier: [['#9a8cff', '11 kV (MV)'], ['#3fd8ff', '400 V (LV)']],
-    condition: [['#47e39a', 'Good > 70%'], ['#ffb547', 'Worn 40–70%'], ['#ff5468', 'Poor < 40%']],
-    outages: [['#ff5468', 'Unpowered + reason'], ['#47e39a', 'Powered']],
+    flow: [['#ffcf3a', 'Energised 400 V'], ['repeating-linear-gradient(0deg,#ffe9a8 0 2px,transparent 2px 4px)', 'Energised 11 kV (double)'], ['repeating-linear-gradient(90deg,#4a4038 0 5px,transparent 5px 8px)', 'Dead (dashed)']],
+    capacity: [['#74d36b', '< 60% load'], ['#ff9f3a', '85–100%'], ['#ff5a4e', 'Overloaded']],
+    tier: [['#ff8a4a', '11 kV (MV)'], ['#ffcf3a', '400 V (LV)']],
+    condition: [['#74d36b', 'Good > 70%'], ['#ff9f3a', 'Worn 40–70%'], ['#ff5a4e', 'Poor < 40%']],
+    outages: [['#ff5a4e', 'Unpowered + reason'], ['#74d36b', 'Powered']],
   };
   function setLegend(name) {
     legend.hidden = false;
@@ -261,5 +365,5 @@ export function createHud(ui, labelsEl, cb) {
     }
   }
 
-  return { show, update, setTool, alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
+  return { show, update, setTool, closeObjCard: () => (card.id ? (closeCard(true), true) : false), alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
 }

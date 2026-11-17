@@ -6,9 +6,11 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 export const PALETTE = {
-  night: { sky: new THREE.Color('#0a1626'), fog: new THREE.Color('#0d1b2c'), hemiSky: new THREE.Color('#5d82b8'), hemiGround: new THREE.Color('#0c1522'), hemi: 1.25, key: new THREE.Color('#9ab8ff'), keyI: 1.1 },
-  day: { sky: new THREE.Color('#58789a'), fog: new THREE.Color('#5a7898'), hemiSky: new THREE.Color('#d2e6f8'), hemiGround: new THREE.Color('#2a3644'), hemi: 2.1, key: new THREE.Color('#fff1dc'), keyI: 2.6 },
-  dusk: { sky: new THREE.Color('#1c2236'), fog: new THREE.Color('#1a2234'), hemiSky: new THREE.Color('#6a6a9a'), hemiGround: new THREE.Color('#0b0e18'), hemi: 0.8, key: new THREE.Color('#ff9e6a'), keyI: 0.9 },
+  // Warm "toy diorama" lighting (reso/graphic): golden key from the upper left, soft sky fill,
+  // the tile floating in a dark void. Night stays readable with cool moonlight.
+  night: { sky: new THREE.Color('#0b0c10'), fog: new THREE.Color('#0b0c10'), hemiSky: new THREE.Color('#8496c4'), hemiGround: new THREE.Color('#2a2418'), hemi: 1.05, key: new THREE.Color('#aebfe6'), keyI: 0.95 },
+  day: { sky: new THREE.Color('#17140f'), fog: new THREE.Color('#17140f'), hemiSky: new THREE.Color('#fff4e2'), hemiGround: new THREE.Color('#6b5634'), hemi: 1.35, key: new THREE.Color('#ffeacb'), keyI: 2.9 },
+  dusk: { sky: new THREE.Color('#151016'), fog: new THREE.Color('#151016'), hemiSky: new THREE.Color('#d9a98a'), hemiGround: new THREE.Color('#2f2216'), hemi: 1.1, key: new THREE.Color('#ffae6b'), keyI: 2.0 },
 };
 
 export function createScene(canvas) {
@@ -16,38 +18,39 @@ export function createScene(canvas) {
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   scene.background = PALETTE.night.sky.clone();
-  scene.fog = new THREE.FogExp2(PALETTE.night.fog.clone(), 0.0024);
+  scene.fog = new THREE.FogExp2(PALETTE.night.fog.clone(), 0.0011);
 
   const camera = new THREE.PerspectiveCamera(30, 1, 5, 3000);
 
   const hemi = new THREE.HemisphereLight(PALETTE.night.hemiSky, PALETTE.night.hemiGround, 0.6);
   scene.add(hemi);
   const key = new THREE.DirectionalLight(PALETTE.night.key, 0.6);
-  key.position.set(-160, 260, 120);
+  key.position.set(-200, 280, -60);
   key.castShadow = true;
-  key.shadow.mapSize.set(2048, 2048);
   const sc = key.shadow.camera;
-  sc.left = -230;
-  sc.right = 230;
-  sc.top = 230;
-  sc.bottom = -230;
+  sc.left = -250;
+  sc.right = 250;
+  sc.top = 250;
+  sc.bottom = -250;
   sc.near = 50;
-  sc.far = 700;
-  key.shadow.bias = -0.0006;
-  key.shadow.normalBias = 0.4;
+  sc.far = 800;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.bias = -0.0004;
+  key.shadow.normalBias = 0.35;
+  key.shadow.radius = 3;
   scene.add(key);
   scene.add(key.target);
 
   const composer = new EffectComposer(renderer);
   composer.setPixelRatio(renderer.getPixelRatio());
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.85, 0.55, 0.82);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.5, 0.9);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -100,10 +103,11 @@ export function createScene(canvas) {
     hemi.intensity = N.hemi + (D.hemi - N.hemi) * dayW;
     key.color.copy(blend('key'));
     key.intensity = N.keyI + (D.keyI - N.keyI) * dayW + duskW * 0.2;
-    // moon from the north-west at night, sun swinging east→west by day
-    key.position.set(-160 + dayW * 60, 260, 120 - dayW * 220);
-    bloom.strength = 0.95 - dayW * 0.45;
-    renderer.toneMappingExposure = 1.15 + dayW * 0.05;
+    // key light from the upper left of the default view (as in the reference renders)
+    key.position.set(-200 + dayW * 40, 280, -60 + dayW * 30);
+    bloom.strength = 0.75 - dayW * 0.45;
+    bloom.threshold = 0.85 + dayW * 0.1;
+    renderer.toneMappingExposure = 1.05 + dayW * 0.05;
     return { dayW, duskW };
   }
 
