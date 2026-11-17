@@ -5,7 +5,7 @@
 // victory and score; this file is the shared engine.
 
 import { CUSTOMER_TYPES } from '../data/balance.js';
-import { planLine, planDrop, planTransformer, dist, nodePos, dropOf, isLVNode, sourceDef, siteBlocked, xfmrRating } from './grid.js';
+import { planLine, planDrop, planTransformer, dist, nodePos, dropOf, isLVNode, isMVNode, custTier, sourceDef, siteBlocked, xfmrRating } from './grid.js';
 import { solve, srcType, ratedKW } from './power.js';
 import { weatherAt } from './weather.js';
 import { initEconomy, accrueMinute, hourlyEconomy, midnight } from './economy.js';
@@ -221,7 +221,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       const eid = newId('d');
       const n = state.nodes[p.from];
       const b = custById(c.building);
-      state.edges[eid] = { id: eid, kind: 'drop', tier: 'LV', a: p.from, b: c.building, length: dist(n, b), cost: p.cost, loadKW: 0, energized: false, built: state.t };
+      state.edges[eid] = { id: eid, kind: 'drop', tier: custTier(state, b), a: p.from, b: c.building, length: dist(n, b), cost: p.cost, loadKW: 0, energized: false, built: state.t };
       state.dropByBuilding[c.building] = eid;
       spend(p.cost);
       emit('built', { what: 'drop', building: c.building, cost: p.cost });
@@ -231,7 +231,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
 
     dropAll(c) {
       const n = state.nodes[c.node];
-      if (!n || !isLVNode(n)) return { ok: false, reason: 'dropNeedsLV' };
+      if (!n || !(isLVNode(n) || isMVNode(n))) return { ok: false, reason: 'dropNeedsLV' };
       const made = [];
       for (const b of map.customers) {
         if (state.dropByBuilding[b.id]) continue;

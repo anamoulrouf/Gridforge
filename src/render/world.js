@@ -1367,7 +1367,7 @@ export function createWorld(scene, map) {
     for (const c0 of core) if (rectDist(x, z, c0) < 1) return R() > 0.07;
     return false;
   };
-  const nTrees = Math.round((1500 * (T.hw * T.hd)) / (224 * 224));
+  const nTrees = Math.min(1900, Math.round((1500 * (T.hw * T.hd)) / (224 * 224)));
   for (let i = 0; i < nTrees; i++) {
     const x = T.cx + (R() * 2 - 1) * T.hw;
     const z = T.cz + (R() * 2 - 1) * T.hd;

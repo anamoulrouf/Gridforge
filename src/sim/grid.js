@@ -191,6 +191,12 @@ export function planLine(state, bal, fromId, to, tierOverride) {
 
 /** Can a service drop hang from this node? (400 V poles and MV/LV transformers) */
 export const isLVNode = (n) => (n.kind === 'pole' && n.tier === 'LV') || (n.kind === 'xfmr' && (n.ratio || 'MV/LV') === 'MV/LV');
+/** Large customers (industry) connect at 11 kV: to an MV pole or a substation's 11 kV side. */
+export const isMVNode = (n) => (n.kind === 'pole' && n.tier === 'MV') || (n.kind === 'xfmr' && n.ratio === 'HV/MV');
+/** Connection tier of a customer (LV unless its type says MV). */
+export const custTier = (state, c) => (state.map.mvTypes || []).includes(c.type) ? 'MV' : 'LV';
+const canFeed = (state, n, c) => (custTier(state, c) === 'MV' ? isMVNode(n) : isLVNode(n));
+const reachOf = (state, bal, c) => (custTier(state, c) === 'MV' ? bal.network.mvDropReach ?? 30 : bal.network.dropReach);
 
 /** LV-capable nodes (LV poles and transformers) within reach of building footprint, nearest first. */
 export function lvNodesInReach(state, bal, buildingId) {
@@ -198,9 +204,9 @@ export function lvNodesInReach(state, bal, buildingId) {
   const out = [];
   for (const id in state.nodes) {
     const n = state.nodes[id];
-    if (!isLVNode(n)) continue;
+    if (!canFeed(state, n, c)) continue;
     const d = rectDist(n.x, n.z, c);
-    if (d <= bal.network.dropReach) out.push({ id, d });
+    if (d <= reachOf(state, bal, c)) out.push({ id, d });
   }
   out.sort((p, q) => p.d - q.d || (p.id < q.id ? -1 : 1));
   return out;
@@ -222,12 +228,12 @@ export function planDrop(state, bal, buildingId, fromId) {
   let src = null;
   if (fromId) {
     const n = state.nodes[fromId];
-    if (!n || !isLVNode(n)) return { ok: false, reason: 'dropNeedsLV' };
-    if (rectDist(n.x, n.z, c) > bal.network.dropReach) return { ok: false, reason: 'dropOutOfReach' };
+    if (!n || !canFeed(state, n, c)) return { ok: false, reason: custTier(state, c) === 'MV' ? 'dropNeedsMV' : 'dropNeedsLV' };
+    if (rectDist(n.x, n.z, c) > reachOf(state, bal, c)) return { ok: false, reason: 'dropOutOfReach' };
     src = fromId;
   } else {
     const list = lvNodesInReach(state, bal, buildingId);
-    if (!list.length) return { ok: false, reason: 'noLVInReach' };
+    if (!list.length) return { ok: false, reason: custTier(state, c) === 'MV' ? 'noMVInReach' : 'noLVInReach' };
     src = list[0].id;
   }
   if (state.credits < bal.costs.drop) return { ok: false, reason: 'noCredits' };

@@ -29,7 +29,7 @@ function buildGraph(state, ignoreState) {
     if (!ignoreState && (e.state === 'trip' || e.state === 'fault' || e.open)) continue;
     if (ignoreState && e.open && !e.closable) continue;
     if (e.kind === 'line' || e.kind === 'switch') add(busOf(state, e.a, e.tier), busOf(state, e.b, e.tier), e.length, id);
-    else add(busOf(state, e.a, 'LV'), 'c:' + e.b, 1, id);
+    else add(busOf(state, e.a, e.tier || 'LV'), 'c:' + e.b, 1, id);
   }
   return adj;
 }
@@ -410,7 +410,7 @@ export function solve(state, bal, ctx = {}) {
     if (!info.edgeId || info.edgeId.startsWith('X:')) continue;
     const e = state.edges[info.edgeId];
     if (!e) continue;
-    const aBus = e.kind === 'drop' ? busOf(state, e.a, 'LV') : busOf(state, e.a, e.tier);
+    const aBus = busOf(state, e.a, e.kind === 'drop' ? e.tier || 'LV' : e.tier);
     e.flowDir = info.parent === aBus ? 1 : -1;
   }
   for (const id in state.edges) {

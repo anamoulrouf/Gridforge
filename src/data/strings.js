@@ -63,6 +63,8 @@ export const S = {
     tariffBand: 'Outside the regulator’s allowed band.',
     alreadyUpgraded: 'Already upgraded.',
     notBuiltYet: 'Nobody lives here yet.',
+    dropNeedsMV: 'Industrial customers connect at 11 kV — from an 11 kV pole or a substation.',
+    noMVInReach: 'No 11 kV pole or substation within 30 m. Run an 11 kV feeder closer first.',
     unknownCommand: 'Unknown action.',
   },
 
