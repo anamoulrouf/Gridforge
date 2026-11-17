@@ -2,7 +2,7 @@
 // §7.4 storage, §8.6 prosumers). The coal station retires at the end of day 3. Replace it with wind,
 // solar, hydro and storage, ride out a storm and a calm overcast day, and reach a 70 % renewable day.
 import { BALANCE } from '../data/balance.js';
-import { LINES as L1 } from '../data/dialogue.js';
+import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { runSteps } from '../sim/steps.js';
 import { srcType, ratedKW } from '../sim/power.js';
@@ -569,6 +569,10 @@ export default {
   director,
   score,
   metrics,
+  refBuild(sim) {
+    runSteps(sim.cmd, sim.state, REF4);
+    for (const id of STREETS) sim.cmd({ type: 'program', id: 'rooftop', target: id });
+  },
   autoplay(sim) {
     runSteps(sim.cmd, sim.state, REF4);
     for (const id of STREETS) sim.cmd({ type: 'program', id: 'rooftop', target: id });

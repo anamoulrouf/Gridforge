@@ -176,3 +176,31 @@ test('campaign stages are deterministic: replay and save/load give identical has
     assert.equal(b.hash(), a.hash(), M.key);
   }
 });
+
+test('every complication is telegraphed at least an hour before it hits', () => {
+  const pairs = {
+    [S2.key]: [['stormForecast', 'stormDamage']],
+    [S3.key]: [['recordsWarning', 'fault', 'preventable']],
+    [S4.key]: [['stormForecast', 'stormDamage'], ['retireSoon', 'retired']],
+    [S5.key]: [['feederWarn', 'feederFault']],
+  };
+  for (const M of [S2, S3, S4, S5]) {
+    // play the reference strategy (so the run survives to its late complications), recording events
+    const sim = createSim({ mission: M });
+    const seen = {};
+    const drain = sim.drainEvents;
+    sim.drainEvents = () => {
+      const evs = drain();
+      for (const e of evs) seen[e.type] ??= e.t;
+      return evs;
+    };
+    M.autoplay(sim);
+    sim.drainEvents();
+    for (const [warn, hit, preventable] of pairs[M.key]) {
+      assert.ok(seen[warn] != null, `${M.key}: ${warn} is announced`);
+      if (preventable && seen[hit] == null) continue; // the reference play prevented it (e.g. inspected and serviced)
+      assert.ok(seen[hit] != null, `${M.key}: ${hit} happens`);
+      assert.ok(seen[warn] != null && seen[hit] - seen[warn] >= 60, `${M.key}: ${warn} (${seen[warn]}) ≥ 60 min before ${hit} (${seen[hit]})`);
+    }
+  }
+});

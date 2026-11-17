@@ -17,7 +17,7 @@ import { createSim, loadSim } from './sim/sim.js';
 import { rectDist, dist as d2 } from './sim/grid.js';
 import { S, fmt } from './data/strings.js';
 import { STAGES } from './missions/index.js';
-import { srcType } from './sim/power.js';
+import { srcType, ratedKW } from './sim/power.js';
 import { windFrac } from './sim/weather.js';
 
 const params = new URLSearchParams(location.search);
@@ -771,7 +771,7 @@ function handleEvents(evs) {
         forecastCheck(true);
         break;
       case 'genRunning':
-        say('genRunning');
+        say('genRunning', { name: srcName(e.id), kw: fmt.kw(ratedKW(bal, st.gens[e.id] || {})) });
         if (app.firstLightPending) {
           app.firstLightPending = false;
           setTimeout(() => learnOnce('firstLight'), 1800);
@@ -829,7 +829,7 @@ function handleEvents(evs) {
           break;
         }
         audio.play('critical');
-        say('noFuel');
+        say('noFuel', { name: srcName(e.id || mainGen()) });
         hud.alert({ id: 'fuel', level: 'critical', title: 'Generator out of fuel', text: 'The whole network is dark. Order fuel now.', actions: [{ label: 'Order fuel · 250 ¢', primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) && hud.dismiss('fuel') }, focusAct('gen')] });
         learnOnce('noFuel', { focus: () => focus({ kind: 'gen' }) });
         break;
@@ -946,7 +946,7 @@ function forecastCheck(force) {
       const key = 'fc' + id + Math.floor(st.clock / 1440);
       if (app.nudges[key] && !force) continue;
       app.nudges[key] = true;
-      say('forecast', { name: xfmrName(id), kw: fmt.kw(n.forecastPeakKW) });
+      say('forecast', { name: xfmrName(id), kw: fmt.kw(n.forecastPeakKW), rating: fmt.kw(n.ratingKW || bal.transformer.ratingKW) });
       hud.alert({ id: 'fc-' + id, level: 'warn', title: `${xfmrName(id)} forecast: ${fmt.kw(n.forecastPeakKW)} at the evening peak`, text: `Its rating is ${fmt.kw(n.ratingKW || bal.transformer.ratingKW)}. ${bal.upgrades?.xfmr100 && !n.upgraded && n.ratio !== 'HV/MV' ? 'Upgrade it or split' : 'Split'} its customers across another transformer before ${n.forecastPeakHour}:00.`, actions: [focusAct(id)], ttl: 15000 });
     }
   }
@@ -965,7 +965,7 @@ function timedNudges() {
   }
   if (st.gen && st.gen.condition < 85 && !app.nudges.service && !st.objectives.service) {
     app.nudges.service = true;
-    say('serviceNudge');
+    say('serviceNudge', { name: srcName(mainGen()) });
   }
   if (st.fault.phase === 'repaired' && st.stableMin > 0 && !app.nudges.stable) {
     app.nudges.stable = true;
@@ -1511,9 +1511,14 @@ function startEnding(sim) {
   const ENDING = M.ui.ending;
   const lines = [...ENDING.common, ENDING[score.ending]];
   if (MET?.decisions) for (const k of Object.keys(ENDING.decisions || {})) if (MET.decisions[k] && lines.length < 5) lines.push(ENDING.decisions[k]);
+  const isLast = M.n === STAGES.length;
+  if (isLast) {
+    // Campaign finale: look back across every region the player electrified.
+    const best = campaign().best;
+    lines.push(`Your grid, region by region — ${STAGES.map((m) => `${m.region} ${best[m.key] ? best[m.key] : '—'}`).join(' · ')}.`);
+  }
   lines.push(ENDING.next);
   audio.setWarmth(13);
-  const isLast = M.n === STAGES.length;
   app.ending = menus.ending({
     kicker: `${M.stageName.split('·')[0].trim()} complete · ${S.endings[score.ending]}`,
     title: M.ui.endTitle,
@@ -1737,6 +1742,7 @@ function frame() {
     buildLabels();
   }
 
+  G.renderer.info.reset();
   composer.render(dt);
 }
 
@@ -1751,6 +1757,9 @@ if (TEST) {
     hash: () => app.sim.hash(),
     cmd: (c) => app.sim.cmd(c),
     fps: () => fps,
+    scene: () => scene,
+    G: () => G,
+    renderStats: () => ({ ...G.renderer.info.render, programs: G.renderer.info.programs?.length, geometries: G.renderer.info.memory.geometries }),
     app,
     world,
     rig,
@@ -1759,6 +1768,8 @@ if (TEST) {
       return M;
     },
     startStage: (n, save = null) => startGame(STAGES[n - 1], save),
+    refBuild: () => M.refBuild?.(app.sim),
+    panel: (k) => select({ kind: k }),
     jumpToEnding: (n) => jumpToEnding(n ? STAGES[n - 1] : M),
     focusAt: (x, z, d) => rig.flyTo(x, z, d),
     worldToScreen(target) {
@@ -1766,7 +1777,7 @@ if (TEST) {
       if (typeof target === 'string') {
         if (app.sim.state.gens[target]) p = srcDef(target);
         else if (target === 'depot') p = map.depot;
-        else p = custOf(target) || app.sim.state.nodes[target];
+        else p = custOf(target) || app.sim.state.nodes[target] || (map.sites || []).find((x) => x.id === target);
       } else p = target;
       return rig.toScreen(p.x, 0, p.z);
     },

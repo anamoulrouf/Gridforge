@@ -4,7 +4,7 @@
 // an industrial supply contract, manages an inflexible coal unit with a gas peaker, and finds
 // hidden wear in an inherited substation before it fails.
 import { BALANCE } from '../data/balance.js';
-import { LINES as L1 } from '../data/dialogue.js';
+import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { typeDef } from '../sim/power.js';
 import { runSteps } from '../sim/steps.js';
@@ -524,6 +524,10 @@ export default {
   director,
   score,
   metrics,
+  refBuild(sim) {
+    runSteps(sim.cmd, sim.state, REF3);
+    sim.cmd({ type: 'startGen', target: 'peaker' });
+  },
   autoplay(sim) {
     runSteps(sim.cmd, sim.state, REF3);
     sim.cmd({ type: 'startGen', target: 'peaker' });

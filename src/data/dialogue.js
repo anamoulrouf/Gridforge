@@ -118,3 +118,16 @@ export const ENDING = {
   },
   next: 'Next: Growing Demand — tariffs, customer classes and a town that won’t stop growing.',
 };
+
+// Shared comms for Stages 2–5: Stage 1's lines with the Stage-1-specific numbers generalised.
+export const LINES_BASE = {
+  ...LINES,
+  firstLight: [['advisor', 'First power delivered. Every powered hour now earns revenue.']],
+  genRunning: [['sofia', '{name} at full output — {kw} available.']],
+  forecast: [['sofia', '{name} is forecast to peak at {kw} this evening — its rating is {rating}. I’d split that load.']],
+  noFuel: [['sofia', '{name} has stalled — no fuel! Order a delivery now.']],
+  serviceNudge: [['sofia', '{name}’s condition is slipping below 85%. A service keeps it efficient.']],
+  marginNudge: [],
+  stableStart: [],
+  stableReset: [],
+};

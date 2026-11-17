@@ -3,7 +3,7 @@
 // sets per-class tariffs inside the regulator's band, keeps low-income bills affordable, connects
 // the High Street and a growing estate, and rides out a heat wave and a storm.
 import { BALANCE } from '../data/balance.js';
-import { LINES as L1, LEARN as LEARN1 } from '../data/dialogue.js';
+import { LINES_BASE as L1, LEARN as LEARN1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { lvNodesInReach, dropOf } from '../sim/grid.js';
 import { typeDef } from '../sim/power.js';
@@ -579,6 +579,10 @@ export default {
   director,
   score,
   metrics,
+  refBuild(sim) {
+    runSteps(sim.cmd, sim.state, REF2.build);
+    for (const c of sim.map.customers) if (sim.state.cust[c.id].active !== false) sim.cmd({ type: 'drop', building: c.id });
+  },
   autoplay(sim) {
     sim.cmd({ type: 'inspect', target: 'finance' });
     sim.cmd({ type: 'inspect', target: 'trust' });

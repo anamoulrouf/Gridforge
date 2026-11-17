@@ -205,6 +205,7 @@ export function createHud(ui, labelsEl, cb) {
     M = m;
     objTitle.innerHTML = `<span>${esc(m.stageName)}</span>`;
     objName.textContent = m.name;
+    document.title = `Gridforge — ${m.name}`;
     document.getElementById('brand').innerHTML = `${S.title}<small>${esc(m.name)}</small>`;
     const want = m.chips.join(',');
     if (want !== shownChips) {
@@ -213,6 +214,10 @@ export function createHud(ui, labelsEl, cb) {
       box.innerHTML = '';
       for (const k of m.chips) if (chips[k]) box.append(chips[k]);
     }
+    chips.demand.dataset.t1 ||= chips.demand.title;
+    chips.powered.dataset.t1 ||= chips.powered.title;
+    chips.demand.title = m.n > 1 ? 'Power your customers want right now. Click for the daily demand curve.' : chips.demand.dataset.t1;
+    chips.powered.title = m.n > 1 ? 'Customers receiving power, out of everyone currently living or working on the map.' : chips.powered.dataset.t1;
     lastObjKey = '';
     closeCard(true);
   }

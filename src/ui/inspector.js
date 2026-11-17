@@ -435,12 +435,17 @@ export function createInspector(ui, cb) {
           .map((t, i) => {
             const up = [...ordered];
             if (i > 0) [up[i - 1], up[i]] = [up[i], up[i - 1]];
-            return `<div class="tariff-row"><span class="tl">${i + 1}. ${S.srcName[t]}</span><span class="tb">${srcType(bal, t).costPerKWh ? srcType(bal, t).costPerKWh.toFixed(2) + ' ¢/kWh' : 'stored'} · ${srcType(bal, t).co2 ? srcType(bal, t).co2 + ' kg/kWh' : 'clean'}</span>${btn('↑', { type: 'dispatchOrder', order: up }, { disabled: i === 0, aria: `Move ${t} up` })}</div>`;
+            const T = srcType(bal, t);
+            const fuelCost = T.fuel && bal.procurement?.fuel ? bal.procurement.fuel.cost / bal.procurement.fuel.qty / (T.kWhPerFuel || bal.generator?.kWhPerFuel || 20) : null;
+            const cost = T.costPerKWh ? `${T.costPerKWh.toFixed(2)} ¢/kWh` : fuelCost != null ? `≈${fuelCost.toFixed(2)} ¢/kWh fuel` : T.storage ? 'stored' : 'no fuel cost';
+            return `<div class="tariff-row"><span class="tl">${i + 1}. ${S.srcName[t]}</span><span class="tb">${cost} · ${T.co2 ? T.co2 + ' kg/kWh' : 'clean'}</span>${btn('↑', { type: 'dispatchOrder', order: up }, { disabled: i === 0, aria: `Move ${t} up` })}</div>`;
           })
           .join('')
       : '';
     let fc = '';
-    if (ctx.mission.systems?.weather) {
+    // the sun/wind forecast only matters once the map has (or can build) weather-driven supply
+    const variable = Object.values(bal.sourceTypes || {}).some((T) => T.variable);
+    if (ctx.mission.systems?.weather && variable) {
       const f = forecast(state.seed, state.clock, ctx.mission.weather, 24);
       const W = 288 / 24;
       const bars = f.map((w, i) => `<rect x="${i * W + 1}" y="${40 - w.sun * (1 - 0.78 * w.cloud) * 36}" width="${W - 2}" height="${w.sun * (1 - 0.78 * w.cloud) * 36}" rx="2" fill="#ffc63a"/><rect x="${i * W + 1}" y="${80 - Math.min(1, w.wind / 25) * 36}" width="${W - 2}" height="${Math.min(1, w.wind / 25) * 36}" rx="2" fill="${w.wind >= 25 || w.wind < 3 ? '#ff5a4e' : '#7cc4f0'}"/>`).join('');
@@ -452,7 +457,7 @@ export function createInspector(ui, cb) {
       head('bolt', 'Supply mix', `Generating ${fmt.kw(total)}`) +
       progBtn +
       kv(rows) +
-      (state.ledger ? kv([['Renewable share today', `${state.ledger.kWhGen > 0 ? Math.round((state.ledger.kWhRenew / state.ledger.kWhGen) * 100) : 0}%`], day ? ['Yesterday', `${Math.round(day.renewPct)}% renewable · ${(day.co2 / 1000).toFixed(2)} t CO₂`] : null, state.flow.curtailedKW > 0.5 ? ['Curtailed now', fmt.kw(state.flow.curtailedKW)] : null]) : '') +
+      (state.ledger && Object.values(bal.sourceTypes || {}).some((T) => T.renewable || T.variable) ? kv([['Renewable share today', `${state.ledger.kWhGen > 0 ? Math.round((state.ledger.kWhRenew / state.ledger.kWhGen) * 100) : 0}%`], day ? ['Yesterday', `${Math.round(day.renewPct)}% renewable · ${(day.co2 / 1000).toFixed(2)} t CO₂`] : null, state.flow.curtailedKW > 0.5 ? ['Curtailed now', fmt.kw(state.flow.curtailedKW)] : null]) : '') +
       disp +
       fc
     );

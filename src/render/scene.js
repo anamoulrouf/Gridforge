@@ -47,10 +47,15 @@ export function createScene(canvas) {
   scene.add(key);
   scene.add(key.target);
 
+  renderer.info.autoReset = false;
   const composer = new EffectComposer(renderer);
   composer.setPixelRatio(renderer.getPixelRatio());
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.5, 0.9);
+  // Bloom at half the canvas resolution: the glow is soft anyway and its mip chain is
+  // the most expensive post-processing cost on large maps / Retina screens.
+  const bloomSetSize = bloom.setSize.bind(bloom);
+  bloom.setSize = (w, h) => bloomSetSize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2)));
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 

@@ -3,7 +3,7 @@
 // Make every kWh clean for a full day: smart EV charging, vehicle-to-grid, demand response,
 // efficiency, more clean supply, and a self-healing network that reroutes around faults.
 import { BALANCE } from '../data/balance.js';
-import { LINES as L1 } from '../data/dialogue.js';
+import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { runSteps } from '../sim/steps.js';
 import { typeDef } from '../sim/power.js';
@@ -194,7 +194,7 @@ const objectives = [
       title: 'Make the network self-healing',
       why: 'Three normally-open tie switches link neighbouring feeders. With automation, when a feeder faults the switches isolate the fault and re-route supply in about a minute.',
       steps: ['Open <b>Programs</b> and buy <b>Feeder automation</b>.', 'Tie switches show as dashed links between feeders.', 'Without it, you must spot faults and close a tie switch yourself.'],
-      now: [prog(st, 'auto').on ? ok('Automation active') : todo('Manual switching only')],
+      now: [prog(st, 'auto').on ? ok('Automation active') : todo('Manual switching only'), st.flags.feederFault ? (st.flags.healed ? ok('Day-3 feeder fault re-routed automatically') : info('Day-3 feeder fault handled manually')) : info('Heat-dome forecast: feeder faults are likely on the day-3 evening peak')],
       focus: panel,
       focusLabel: 'Open Programs',
     }),
@@ -364,6 +364,8 @@ function director(state, api) {
     F.dcExpansion = 'offered';
     api.emit('dcOffer');
   }
+  // telegraph the fault three hours ahead: the heat dome is cooking the feeder joints
+  if (d === 3 && hm === 15 * 60 && !F.feederFault) api.emit('feederWarn');
   if (d === 3 && hm === 18 * 60 && !F.feederFault) {
     const e = Object.keys(state.edges).find((id) => state.edges[id].faultTarget);
     if (e) {
@@ -442,6 +444,7 @@ const LINES5 = {
   intro: [['advisor', 'Welcome to Aurora. The city already runs on wind, sun and a big battery — most of the time.'], ['sofia', 'When the wind drops, we import fossil power from the national grid. The goal: a full day without it.']],
   heatForecast: [['advisor', 'Heat dome tomorrow: cooling demand up about 20 % from noon.']],
   dcOffer: [['daniel', 'The data centre wants to add 40 % more servers from 14:00. More revenue — and more load.']],
+  feederWarn: [['sofia', 'The city feeders are running hot under the heat dome. I expect a cable joint to fail around the evening peak.']],
   feederFault: [['sofia', 'Cable fault on a city feeder! Customers are dark.']],
   selfHealed: [['sofia', 'The automation re-routed around the fault in under a minute. Crew, go fix the cable.']],
   cleanDay: [['maya', 'Twenty-four hours of 100 % clean power — the whole city.']],
@@ -484,7 +487,7 @@ const ui = {
     newSystems: ['<b>Smart charging</b> and <b>vehicle-to-grid</b>', '<b>Demand response</b> and <b>efficiency</b>', '<b>Self-healing</b> networks (tie switches + automation)', 'The <b>100 % clean</b> goal'],
   },
   failCause: { clinic: { title: 'The hospital lost power too long', body: 'Aurora General was dark for 4 hours.', tip: 'Feeder automation and storage protect critical services.' } },
-  handles: ['heatForecast', 'dcOffer', 'feederFault', 'selfHealed', 'cleanDay', 'cleanBroken', 'program', 'switched'],
+  handles: ['heatForecast', 'dcOffer', 'feederWarn', 'feederFault', 'selfHealed', 'cleanDay', 'cleanBroken', 'program', 'switched'],
   onEvent(e, u) {
     switch (e.type) {
       case 'heatForecast':
@@ -495,6 +498,11 @@ const ui = {
         u.audio.play('warn');
         u.say('dcOffer');
         u.hud.alert({ id: 'dc', level: 'info', title: 'Data centre asks for +40 % from 14:00', text: 'More revenue, and about 500 kW more load all day and night. Can your clean supply carry it?', actions: [{ label: 'Accept', primary: true, fn: () => u.cmd({ type: 'dcExpand', accept: true }).ok && u.hud.dismiss('dc') }, { label: 'Decline', fn: () => u.cmd({ type: 'dcExpand', accept: false }).ok && u.hud.dismiss('dc') }] });
+        break;
+      case 'feederWarn':
+        u.audio.play('warn');
+        u.say('feederWarn');
+        u.hud.alert({ id: 'fw', level: 'warn', title: 'Feeder joints running hot', text: u.state.programs?.auto?.on ? 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak — feeder automation is armed.' : 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak. Turn on feeder automation, or be ready to close a tie switch (dashed link).', ttl: 20000, actions: [{ label: 'Programs', primary: true, fn: () => u.select({ kind: 'programs' }) }] });
         break;
       case 'feederFault':
         u.audio.play('trip');
@@ -644,6 +652,12 @@ export default {
   director,
   score,
   metrics,
+  refBuild(sim) {
+    runSteps(sim.cmd, sim.state, REF5);
+    sim.state.credits += 80000;
+    runSteps(sim.cmd, sim.state, REF5_DAY2);
+    runSteps(sim.cmd, sim.state, REF5_DAY3);
+  },
   autoplay(sim) {
     runSteps(sim.cmd, sim.state, REF5);
     for (let i = 0; i < 7 * D && !sim.state.result; i++) {

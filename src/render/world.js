@@ -4,6 +4,7 @@
 // station, neighbouring town, lake, farm) that preview later stages.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { rng } from '../sim/rng.js';
 import { rectDist } from '../sim/grid.js';
 import { poolTexture, grassTexture, soilTexture, plateTexture, clockTexture, stripeTexture, hazardTexture, ribTexture, crossTexture, roofTileTexture } from './textures.js';
@@ -286,13 +287,30 @@ export function createWorld(scene, map) {
     }
     lights.push({ g: gid, mesh: 'bulb', idx: bulbXf.length - 1, thr, lit: true, color });
   }
+  // Ground light pools: one additive instanced mesh. Additive blending makes
+  // "colour × opacity" equivalent to fading, so per-pool fades are instance colours.
+  let poolMesh = null;
+  const poolXf = [];
+  const _poolQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  const _poolV = new THREE.Vector3();
+  const _poolS = new THREE.Vector3();
+  const _poolC = new THREE.Color();
+  function placePool(r) {
+    _m4.compose(_poolV.set(r.x, 0.36, r.z), _poolQ, _poolS.set(r.size, r.size, 1));
+    poolMesh.setMatrixAt(r.idx, _m4);
+    poolMesh.setColorAt(r.idx, _poolC.setRGB(0, 0, 0));
+  }
   function addPool(gid, x, z, size, color = '#ffb36b', opacity = 0.5) {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: poolTexture(), color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, 0.36, z);
-    m.userData.maxOpacity = opacity;
-    root.add(m);
-    groups[gid].pools.push(m);
+    if (poolMesh && poolXf.length >= poolMesh.instanceMatrix.count) return;
+    const r = { x, z, size, color: new THREE.Color(color), maxOpacity: opacity, idx: poolXf.length };
+    poolXf.push(r);
+    if (poolMesh) {
+      placePool(r);
+      poolMesh.count = poolXf.length;
+      poolMesh.instanceMatrix.needsUpdate = true;
+      poolMesh.instanceColor.needsUpdate = true;
+    }
+    groups[gid].pools.push(r);
   }
 
   /** Windows on a box's facades, given in the building group's local frame.
@@ -1467,12 +1485,99 @@ export function createWorld(scene, map) {
     frameMesh.receiveShadow = true;
     root.add(frameMesh, winMesh, bulbMesh);
   }
+  poolMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: poolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), poolXf.length + SPARE);
+  poolMesh.frustumCulled = false;
+  poolXf.forEach(placePool);
+  poolMesh.count = poolXf.length;
+  root.add(poolMesh);
 
   groups.neighbour.target = 1;
   groups.depot.target = 1;
   if (groups.genyard) groups.genyard.target = 1;
   turbines.forEach((t) => (groups[t.gid].target = 1));
   for (const id in sources) if (groups[sources[id].gid] && sources[id].gid !== 'genyard') groups[sources[id].gid].target = 1;
+
+  // ---------------------------------------------------------------- static batching
+  // Many small static meshes share a handful of cached materials. Merge them per
+  // material (per building / source group, and per 160 m cell for scenery) so a big
+  // map costs a few hundred draw calls instead of thousands. Animated or
+  // individually-driven parts (fans, rotors, light pools, signs) stay separate.
+  const keepLive = new Set();
+  const markLive = (o) => o && keepLive.add(o);
+  function mergeStatic(container, cell = 0, stop = new Set()) {
+    container.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(container.matrixWorld).invert();
+    const buckets = new Map();
+    const tmp = new THREE.Matrix4();
+    const wp = new THREE.Vector3();
+    (function walk(o) {
+      for (const c of o.children) {
+        if (stop.has(c) || keepLive.has(c) || c.visible === false) continue;
+        if (c.isMesh && !c.isInstancedMesh && !c.isSkinnedMesh && !Array.isArray(c.material) && c.geometry?.attributes?.position && !c.material.transparent) {
+          const g = c.geometry;
+          const attrs = Object.keys(g.attributes).sort().join(',');
+          let ck = '';
+          if (cell) {
+            c.getWorldPosition(wp);
+            ck = Math.floor(wp.x / cell) + ':' + Math.floor(wp.z / cell);
+          }
+          const key = c.material.uuid + '|' + c.castShadow + c.receiveShadow + '|' + !!g.index + '|' + attrs + '|' + g.groups.length + '|' + ck;
+          (buckets.get(key) || buckets.set(key, []).get(key)).push(c);
+        }
+        if (!(c.isMesh && keepLive.has(c))) walk(c);
+      }
+    })(container);
+    let merged = 0;
+    for (const list of buckets.values()) {
+      if (list.length < 2) continue;
+      const geos = [];
+      for (const m of list) {
+        const g = m.geometry.clone();
+        if (g.groups.length) g.clearGroups();
+        g.applyMatrix4(tmp.multiplyMatrices(inv, m.matrixWorld));
+        if (m.matrixWorld.determinant() < 0 && g.index) {
+          const ix = g.index.array;
+          for (let i = 0; i < ix.length; i += 3) [ix[i + 1], ix[i + 2]] = [ix[i + 2], ix[i + 1]];
+        }
+        geos.push(g);
+      }
+      const geo = mergeGeometries(geos, false);
+      geos.forEach((g) => g.dispose());
+      if (!geo) continue;
+      const mm = new THREE.Mesh(geo, list[0].material);
+      mm.castShadow = list[0].castShadow;
+      mm.receiveShadow = list[0].receiveShadow;
+      mm.userData.merged = list.length;
+      for (const m of list) {
+        m.parent.remove(m);
+        if (m.children.length) for (const ch of [...m.children]) container.attach(ch);
+      }
+      container.add(mm);
+      merged += list.length - 1;
+    }
+    return merged;
+  }
+  function batchStatic() {
+    for (const id in groups) {
+      for (const sg of groups[id].signs) markLive(sg.mesh);
+    }
+    const dynamicRoots = new Set();
+    for (const t of turbines) markLive(t.hub);
+    for (const id in sources) {
+      markLive(sources[id].fan);
+      markLive(sources[id].beacon);
+      dynamicRoots.add(sources[id].group);
+    }
+    if (generator) markLive(generator.beacon), markLive(generator.fan);
+    for (const id in buildings) {
+      dynamicRoots.add(buildings[id].group);
+      if (buildings[id].plot) dynamicRoots.add(buildings[id].plot);
+    }
+    dynamicRoots.delete(undefined);
+    for (const g of dynamicRoots) if (g?.parent) mergeStatic(g);
+    mergeStatic(root, 160, dynamicRoots);
+  }
+  batchStatic();
 
   // ---------------------------------------------------------------- per-frame lighting
   const col = new THREE.Color();
@@ -1486,7 +1591,7 @@ export function createWorld(scene, map) {
       const g = groups[id];
       const speed = g.target > g.level ? 0.55 : 2.2; // slow staggered light-up, quick blackout
       g.level += Math.sign(g.target - g.level) * Math.min(Math.abs(g.target - g.level), dt * speed);
-      for (const p of g.pools) p.material.opacity = p.userData.maxOpacity * g.level * nk * nk;
+      for (const p of g.pools) poolMesh.setColorAt(p.idx, _poolC.copy(p.color).multiplyScalar(p.maxOpacity * g.level * nk * nk));
       for (const s of g.signs) s.mesh.material.emissiveIntensity = s.emissive * g.level * (0.25 + 0.75 * nk);
     }
     const flick = Math.floor(time * 9);
@@ -1504,6 +1609,7 @@ export function createWorld(scene, map) {
     }
     winMesh.instanceColor.needsUpdate = true;
     bulbMesh.instanceColor.needsUpdate = true;
+    if (poolMesh.instanceColor) poolMesh.instanceColor.needsUpdate = true;
   }
 
   function setPower(id, status) {
@@ -1528,6 +1634,10 @@ export function createWorld(scene, map) {
     sources,
     buildSource(def) {
       const m = buildSource(def);
+      markLive(m.fan);
+      markLive(m.beacon);
+      for (const t of m.turbines) markLive(t.hub);
+      if (m.group) mergeStatic(m.group);
       groups[m.gid] && (groups[m.gid].target = 1);
       for (const t of m.turbines) groups[t.gid].target = 1;
       return m;

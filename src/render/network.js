@@ -2,6 +2,7 @@
 // ground "flow ribbons" with travelling pulses (GDD §15 power visualisation; video reference).
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { glowTexture, hazardTexture } from './textures.js';
 import { sourceDef } from '../sim/grid.js';
 import { rectDist } from '../sim/grid.js';
@@ -217,6 +218,60 @@ export function createNetworkView(scene, map) {
     }
   }
 
+
+  // Static batching: a pole/tower/transformer's opaque parts are baked into ≤ 2
+  // vertex-coloured meshes (matte + metal), cached per node shape, so a network of
+  // hundreds of poles costs a few draw calls each instead of 6–20.
+  const vcMatte = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 });
+  const vcMetal = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.35 });
+  const bakeCache = new Map();
+  const _m = new THREE.Matrix4();
+  function bake(g, sig) {
+    g.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+    const parts = [];
+    g.traverse((o) => {
+      if (o.isMesh && o.material?.isMeshStandardMaterial && !o.material.transparent && !o.material.userData?.own && !o.material.vertexColors) parts.push(o);
+    });
+    if (parts.length < 2) return;
+    let baked = bakeCache.get(sig);
+    if (!baked) {
+      const buckets = { matte: [], metal: [] };
+      const flags = { matte: { cast: false, recv: false }, metal: { cast: false, recv: false } };
+      for (const o of parts) {
+        const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+        for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal') geo.deleteAttribute(k);
+        geo.clearGroups();
+        geo.applyMatrix4(_m.multiplyMatrices(inv, o.matrixWorld));
+        const n = geo.attributes.position.count;
+        const col = new Float32Array(n * 3);
+        const c = o.material.color;
+        for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        const b = o.material.metalness > 0.2 ? 'metal' : 'matte';
+        buckets[b].push(geo);
+        flags[b].cast ||= o.castShadow;
+        flags[b].recv ||= o.receiveShadow;
+      }
+      baked = [];
+      for (const b of ['matte', 'metal']) {
+        if (!buckets[b].length) continue;
+        const geo = mergeGeometries(buckets[b], false);
+        buckets[b].forEach((x) => x.dispose());
+        geo.userData.shared = true;
+        baked.push({ geo, mat: b === 'metal' ? vcMetal : vcMatte, ...flags[b] });
+      }
+      bakeCache.set(sig, baked);
+    }
+    for (const o of parts) o.parent.remove(o);
+    for (const b of baked) {
+      const m = new THREE.Mesh(b.geo, b.mat);
+      m.castShadow = b.cast;
+      m.receiveShadow = b.recv;
+      g.add(m);
+    }
+  }
+
   function makeNode(state, n) {
     const g = new THREE.Group();
     g.position.set(n.x, 0, n.z);
@@ -284,6 +339,7 @@ export function createNetworkView(scene, map) {
       if (sub) v.ring.scale.setScalar(3);
       g.add(v.ring);
     }
+    if (n.kind !== 'gen') bake(g, n.kind + '|' + (n.tier || '') + '|' + (n.ratio || '') + '|' + (n.onPole ? 'p' : ''));
     // glowing node dot on the ground (the reference's bright junctions)
     v.dotMat = new THREE.MeshBasicMaterial({ map: dotTex, color: COL.dead.clone(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     v.dotMat.userData.own = true;
@@ -332,13 +388,14 @@ export function createNetworkView(scene, map) {
     const pz = dirX / L;
     const offsets = e.kind === 'line' && e.tier === 'HV' ? [-4, 0, 4] : e.kind === 'line' && e.tier === 'MV' ? [-1.3, 0, 1.3] : [0];
     const r = e.kind === 'drop' ? 0.1 : e.tier === 'HV' ? 0.16 : e.tier === 'MV' ? 0.13 : 0.17;
-    for (const o of offsets) {
-      const curve = catenary(new THREE.Vector3(a.x + px * o, a.y, a.z + pz * o), new THREE.Vector3(b.x + px * o, b.y, b.z + pz * o), Math.min(e.tier === 'HV' ? 4 : 1.6, L * 0.035));
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, r, 6, false), v.wireMat);
-      tube.castShadow = true;
-      g.add(tube);
-      v.wires.push(tube);
-    }
+    // all conductors of a span share one material → one merged mesh per span
+    const tubes = offsets.map((o) => new THREE.TubeGeometry(catenary(new THREE.Vector3(a.x + px * o, a.y, a.z + pz * o), new THREE.Vector3(b.x + px * o, b.y, b.z + pz * o), Math.min(e.tier === 'HV' ? 4 : 1.6, L * 0.035)), 16, r, 6, false));
+    const wireGeo = tubes.length > 1 ? mergeGeometries(tubes, false) : tubes[0];
+    if (tubes.length > 1) tubes.forEach((t) => t.dispose());
+    const tube = new THREE.Mesh(wireGeo, v.wireMat);
+    tube.castShadow = true;
+    g.add(tube);
+    v.wires.push(tube);
     const width = e.kind === 'drop' ? 1.0 : e.tier === 'HV' ? 3.6 : e.tier === 'MV' ? 2.6 : 1.8;
     v.mat = ribbonMaterial();
     v.mat.userData.own = true;
