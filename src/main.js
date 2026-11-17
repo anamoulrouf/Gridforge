@@ -357,23 +357,32 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0 || !p) return;
   const pk = pick(p);
+  // Line tool: pressing on a pole/transformer/generator starts a line (drag-to-build stays).
+  if (app.tool === 'line' && !app.lineStart && pickNodeId(pk)) {
+    app.lineStart = pickNodeId(pk);
+    app.dragging = true;
+    app.downPt = p;
+    audio.play('select');
+    return;
+  }
+  // Everything else is decided on release: a drag pans the map, a click acts.
+  lpan = { x: e.clientX, y: e.clientY, moved: false, g: p, p, pk };
+  canvas.setPointerCapture(e.pointerId);
+});
+let lpan = null;
+/** Left-click action for the current tool (runs on release if the mouse didn't drag). */
+function primaryClick(p, pk) {
   switch (app.tool) {
     case 'select':
       select(pk && pk.kind !== 'node' && pk.kind !== 'edge' ? (pk.kind === 'gen' ? { kind: 'gen' } : pk) : pk);
       break;
     case 'line': {
       if (!app.lineStart) {
-        const id = pickNodeId(pk);
-        if (!id) {
-          audio.play('error');
-          lockTip(`<b>${S.reasons.noStart}</b>`, true);
-          return;
-        }
-        app.lineStart = id;
-        app.dragging = true;
-        app.downPt = p;
-        audio.play('select');
-      } else commitLine(p);
+        audio.play('error');
+        lockTip(`<b>${S.reasons.noStart}</b>`, true);
+        return;
+      }
+      commitLine(p);
       break;
     }
     case 'xfmr': {
@@ -415,19 +424,21 @@ canvas.addEventListener('pointerdown', (e) => {
       break;
     }
   }
-});
+}
 canvas.addEventListener('pointermove', (e) => {
   app.mouse.x = e.clientX;
   app.mouse.y = e.clientY;
   app.mouse.moved = true;
-  if (rpan) {
+  for (const pan of [rpan, lpan]) {
+    if (!pan) continue;
     const p = rig.groundAt(e.clientX, e.clientY);
-    if (Math.hypot(e.clientX - rpan.x, e.clientY - rpan.y) > 4) rpan.moved = true;
-    if (rpan.moved && p && rpan.g) {
-      rig.goal.x += rpan.g.x - p.x;
-      rig.goal.z += rpan.g.z - p.z;
-      rig.target.x += rpan.g.x - p.x;
-      rig.target.z += rpan.g.z - p.z;
+    if (Math.hypot(e.clientX - pan.x, e.clientY - pan.y) > 5) pan.moved = true;
+    if (pan.moved && p && pan.g) {
+      canvas.classList.add('panning');
+      rig.goal.x += pan.g.x - p.x;
+      rig.goal.z += pan.g.z - p.z;
+      rig.target.x += pan.g.x - p.x;
+      rig.target.z += pan.g.z - p.z;
     }
   }
 });
@@ -443,6 +454,14 @@ canvas.addEventListener('pointerup', (e) => {
       else select(null);
     }
     rpan = null;
+    canvas.classList.remove('panning');
+    return;
+  }
+  canvas.classList.remove('panning');
+  if (lpan && e.button === 0) {
+    const pan = lpan;
+    lpan = null;
+    if (!pan.moved && app.mode === 'game' && !menus.isOpen()) primaryClick(pan.p, pan.pk);
     return;
   }
   if (app.mode !== 'game' || e.button !== 0) return;
@@ -555,7 +574,7 @@ function updateHover() {
   app.mouse.ground = p;
   const pk = p ? pick(p) : null;
   app.hover = pk;
-  canvas.style.cursor = rpan?.moved ? 'grabbing' : app.tool !== 'select' ? 'crosshair' : pk ? 'pointer' : 'default';
+  canvas.style.cursor = rpan?.moved || lpan?.moved ? 'grabbing' : app.tool !== 'select' ? 'crosshair' : pk ? 'pointer' : 'grab';
   if (performance.now() < app.tipLock) return;
   const st = S_();
   let tip = null;

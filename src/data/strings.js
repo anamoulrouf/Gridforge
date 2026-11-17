@@ -65,7 +65,7 @@ export const S = {
   genState: { off: 'Off', starting: 'Starting…', running: 'Running', nofuel: 'Out of fuel' },
 
   tools: {
-    select: { name: 'Select', key: 'V', hint: 'Click anything to inspect it. Drag with right mouse or WASD to pan, wheel to zoom, Q/E to rotate.' },
+    select: { name: 'Select', key: 'V', hint: 'Click anything to inspect it. Drag the map to move around (or WASD), wheel to zoom, Q/E to rotate.' },
     line: { name: 'Line', key: 'L', hint: 'Click the generator, a pole or a transformer, then click where the line goes — poles are added every ≤40 m. Keep clicking to extend; right-click to stop.' },
     xfmr: { name: 'Transformer', key: 'T', hint: 'Click an 11 kV (MV) pole to mount a transformer (600 ¢). Lines drawn from it carry 400 V.' },
     drop: { name: 'Service drop', key: 'C', hint: 'Click a building to connect it to the nearest 400 V pole within 22 m (15 ¢) — or click a 400 V pole to connect every building in reach.' },
@@ -103,7 +103,8 @@ export const S = {
   help: {
     controls: [
       ['Left click', 'Select · place · confirm'],
-      ['Right click', 'Cancel current tool (right-drag pans)'],
+      ['Left or right drag', 'Move around the map'],
+      ['Right click', 'Cancel current tool'],
       ['W A S D / arrows / screen edge', 'Pan camera'],
       ['Mouse wheel', 'Zoom'],
       ['Q / E', 'Rotate camera 90°'],
