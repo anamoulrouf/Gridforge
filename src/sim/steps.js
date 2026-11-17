@@ -9,6 +9,10 @@ export function runSteps(cmd, state, steps) {
     const c = { ...s };
     for (const k of ['from', 'at', 'target', 'node']) if (typeof c[k] === 'string') c[k] = ref(c[k]);
     if (c.to && typeof c.to === 'string') c.to = ref(c.to);
+    if (s.type === 'line' && (c.to == null || c.from == null)) {
+      failed.push({ step: s, reason: 'badRef' });
+      continue;
+    }
     const r = cmd(c);
     if (s.type === 'line' && r.ok) last = r.last;
     if ((s.type === 'transformer' || s.type === 'substation' || s.type === 'build') && r.ok) last = r.id;

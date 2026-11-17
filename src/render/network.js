@@ -459,7 +459,7 @@ export function createNetworkView(scene, map) {
       const rating = e.kind === 'drop' ? 1e9 : e.ratingKW || (e.tier === 'MV' ? opts.bal.network.mvRatingKW : opts.bal.network.lvRatingKW);
       const ratio = e.loadKW / rating;
       let c;
-      let dash = !e.energized && v.energy < 0.05;
+      let dash = (!e.energized && v.energy < 0.05) || !!e.open;
       if (overlay === 'tier') c = e.kind !== 'line' ? COL.lv : e.tier === 'HV' ? COL.tierHV : e.tier === 'MV' ? COL.tierMV : COL.lv;
       else if (overlay === 'capacity') c = e.kind === 'drop' ? COL.lv : loadColor(ratio);
       else if (overlay === 'condition') c = COL.dead;

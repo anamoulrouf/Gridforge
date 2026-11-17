@@ -191,7 +191,7 @@ export function solve(state, bal, ctx = {}) {
     activeCount++;
     let d = demandAt(bal, c.type, hour) * (c.scale || 1);
     if (ctx.demandMod) d = ctx.demandMod(state, c, d, hour, w);
-    cs.pvKW = c.pvKWp && state.prosumers?.[c.id] !== false ? c.pvKWp * solarFrac(w) : 0;
+    cs.pvKW = c.pvKWp && state.prosumers?.[c.id] ? c.pvKWp * solarFrac(w) : 0;
     cs.grossDemand = d;
     cs.demand = Math.max(0, d - cs.pvKW);
     cs.exportKW = Math.max(0, cs.pvKW - d);

@@ -300,6 +300,7 @@ function cmd(c, quiet = false) {
 }
 function doAction(a) {
   if (a.type === 'deselect') return select(null);
+  if (a.type === 'openPanel') return select({ kind: a.kind });
   if (a.type === 'confirmRemove') return confirmRemove(a.target);
   const r = cmd(a);
   if (r.ok && a.type === 'transformer') audio.play('build');

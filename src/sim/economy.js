@@ -41,9 +41,11 @@ export function accrueMinute(state, bal) {
     L.revenue += rev;
     L.kWh += kwh;
     // prosumer export credit (net metering at the export price)
-    if (cs.exportKW > 0 && bal.exportPrice != null) {
-      const exp = (cs.exportKW / 60) * bal.exportPrice;
-      L.exportCredit += exp;
+    if (cs.exportKW > 0) {
+      // prosumer export: clean energy into the grid, credited at the export price (net metering)
+      L.exportCredit += (cs.exportKW / 60) * (bal.exportPrice ?? 0);
+      L.kWhRenew += cs.exportKW / 60;
+      L.kWhGen += cs.exportKW / 60;
     }
     if (cs.dropped && cs.connected && cs.served < cs.demand - 1e-6) L.unservedKWh += (cs.demand - cs.served) / 60;
     if (c.contract) {

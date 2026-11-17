@@ -176,6 +176,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
         const eid = newId('e');
         const length = dist(a, b);
         state.edges[eid] = { id: eid, kind: 'line', tier: p.tier, a: ids[i], b: ids[i + 1], length, cost: Math.ceil(length) * cpm, loadKW: 0, energized: false, built: state.t, state: 'ok', overMin: 0 };
+        if (c.tie) Object.assign(state.edges[eid], { tie: true, open: true, closable: true });
       }
       if (!p.hv) {
         state.inv.poles -= p.newPoles;
@@ -251,7 +252,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (!opt) return { ok: false, reason: 'badTarget' };
       if (site.unlockAt != null && state.clock < site.unlockAt) return { ok: false, reason: 'notYet' };
       if (state.credits < opt.cost) return { ok: false, reason: 'noCredits' };
-      const def = { id: site.id, type: opt.type, tier: opt.tier || site.tier || 'MV', x: site.x, z: site.z, w: site.w, d: site.d, port: site.port, kw: opt.kw, kwh: opt.kwh, soc: opt.soc, reservoir: opt.reservoir };
+      const def = { id: site.id, type: opt.type, name: site.name?.replace(/ site$/, ''), tier: opt.tier || site.tier || 'MV', x: site.x, z: site.z, w: site.w, d: site.d, port: site.port, kw: opt.kw, kwh: opt.kwh, soc: opt.soc, reservoir: opt.reservoir, turbines: site.turbines };
       state.built[site.id] = def;
       state.nodes[site.id] = { id: site.id, kind: 'gen', tier: def.tier, x: site.x, z: site.z, cost: opt.cost, built: state.t, site: true };
       state.gens[site.id] = mkGen(def, bal);
@@ -460,6 +461,15 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (state.credits < bal.costs.maintain) return { ok: false, reason: 'noCredits' };
       spend(bal.costs.maintain);
       return dispatch({ type: 'maintain', target: id });
+    },
+
+    switch(c) {
+      const e = state.edges[c.target];
+      if (!e || !e.tie) return { ok: false, reason: 'badTarget' };
+      e.open = !!c.open;
+      emit('switched', { target: c.target, open: e.open });
+      resolveAndDiff();
+      return { ok: true };
     },
 
     upgrade(c) {
@@ -966,6 +976,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
   // pre-built (inherited) network: built for free at load, not part of the command log
   if (mission.prebuilt) {
     const keep = { credits: state.credits, inv: { ...state.inv }, spent: state.stats.spent };
+    state.credits = 1e9;
+    state.inv = { poles: 1e6, cable: 1e7, transformers: 1e4, substations: 1e4, kits: state.inv.kits };
     const failed = runSteps((c) => (handlers[c.type] ? handlers[c.type](c) : { ok: false, reason: 'unknownCommand' }), state, mission.prebuilt);
     if (failed.length) state.prebuiltFailed = failed.map((f) => `${f.step.type}:${f.reason}`);
     Object.assign(state, { credits: keep.credits, inv: keep.inv });

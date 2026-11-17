@@ -246,6 +246,7 @@ export function createInspector(ui, cb) {
         (e.state === 'fault' ? `<div class="why"><b>Storm damage.</b>A crew must repair it (1 kit + ${bal.costs.repairLabour} ¢).</div>` : '') +
         (rating ? `<div class="meter-label" style="margin-top:12px"><span>Load ${fmt.kw(e.loadKW)}</span><span>Rating ${fmt.kw(rating)}</span></div>${meter((e.loadKW / rating) * 100)}` : '') +
         kv([e.kind === 'line' ? ['Losses now', loss >= 1 ? fmt.kw(loss) : `${(loss * 1000).toFixed(0)} W`] : null, e.kind === 'drop' ? ['Feeds', esc(state.map.customers.find((c) => c.id === e.b)?.name || '')] : null, job ? ['Crew', job] : null]) +
+        (e.tie ? `<div class="why ${e.open ? '' : 'ok'}"><b>Tie switch — normally open</b>${e.open ? 'Open: the two feeders run separately. Close it to re-route supply around a fault.' : 'Closed: power can flow between the two feeders.'}</div><div class="actions">${btn(e.open ? 'Close switch' : 'Open switch', { type: 'switch', target: e.id, open: !e.open }, { primary: e.open, icon: 'cable' })}</div>` : '') +
         `<div class="actions">${e.state === 'trip' ? btn(cool > 0 ? `Reset (cooling ${cool} min)` : 'Reset', { type: 'reset', target: e.id }, { primary: cool <= 0, disabled: cool > 0, icon: 'restart' }) : ''}${e.state === 'fault' ? btn(`Send repair crew · ${bal.costs.repairLabour} ¢ + kit`, { type: 'repair', target: e.id }, { primary: true, icon: 'truck', disabled: !!job || state.inv.kits < 1 }) : ''}${btn('Remove', { type: 'confirmRemove', target: e.id }, { danger: true, icon: 'trash' })}</div>`
       );
     }
@@ -446,8 +447,10 @@ export function createInspector(ui, cb) {
       fc = sec('Next 24 h — sun (top) and wind (bottom)') + `<svg viewBox="0 0 288 84" style="width:100%" role="img" aria-label="Weather forecast">${bars}<line x1="0" x2="288" y1="${80 - (3 / 25) * 36}" y2="${80 - (3 / 25) * 36}" stroke="#c2b29c" stroke-dasharray="2 3"/></svg><div class="note">Red wind bars: below cut-in or above storm cut-out — turbines produce nothing. ${f.find((w) => w.label)?.label ? `<b>${esc(f.find((w) => w.label).label)}</b>` : ''}</div>`;
     }
     const day = state.days?.[state.days.length - 1];
+    const progBtn = ctx.mission.ui.programsPanel ? `<div class="actions">${btn('Programs', { type: 'openPanel', kind: 'programs' }, { primary: true, icon: 'bolt' })}</div>` : '';
     return (
       head('bolt', 'Supply mix', `Generating ${fmt.kw(total)}`) +
+      progBtn +
       kv(rows) +
       (state.ledger ? kv([['Renewable share today', `${state.ledger.kWhGen > 0 ? Math.round((state.ledger.kWhRenew / state.ledger.kWhGen) * 100) : 0}%`], day ? ['Yesterday', `${Math.round(day.renewPct)}% renewable · ${(day.co2 / 1000).toFixed(2)} t CO₂`] : null, state.flow.curtailedKW > 0.5 ? ['Curtailed now', fmt.kw(state.flow.curtailedKW)] : null]) : '') +
       disp +
