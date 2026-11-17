@@ -10,6 +10,7 @@ import { solve, srcType, ratedKW } from './power.js';
 import { weatherAt } from './weather.js';
 import { initEconomy, accrueMinute, hourlyEconomy, midnight } from './economy.js';
 import { rng, fnv, canonical } from './rng.js';
+import { runSteps } from './steps.js';
 import STAGE1 from '../missions/stage1.js';
 
 export const POWERED = new Set(['on', 'partial']);
@@ -794,7 +795,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       state.billing.revenueToday += kwh * (bal.tariff ?? 0);
       const on = POWERED.has(cs.status);
       if (on) cs.poweredMin++;
-      if (s.firstLightT != null) {
+      // reliability: Stage 1 counts every customer after first light; later stages count connected ones
+      if (s.firstLightT != null && (bal.relCountsAll !== false || cs.dropped)) {
         s.custMinTotal++;
         if (on) s.custMinPowered++;
       }
@@ -961,8 +963,22 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     return e;
   }
 
+  // pre-built (inherited) network: built for free at load, not part of the command log
+  if (mission.prebuilt) {
+    const keep = { credits: state.credits, inv: { ...state.inv }, spent: state.stats.spent };
+    const failed = runSteps((c) => (handlers[c.type] ? handlers[c.type](c) : { ok: false, reason: 'unknownCommand' }), state, mission.prebuilt);
+    if (failed.length) state.prebuiltFailed = failed.map((f) => `${f.step.type}:${f.reason}`);
+    Object.assign(state, { credits: keep.credits, inv: keep.inv });
+    state.stats.spent = keep.spent;
+    for (const id in state.nodes) state.nodes[id].cost = state.nodes[id].kind === 'xfmr' ? 0 : state.nodes[id].cost && 0;
+    for (const id in state.edges) state.edges[id].cost = 0;
+    mission.afterPrebuilt?.(state);
+  }
   // initial solve so flow fields exist
   solve(state, bal, ctx);
+  prevPowered = new Set(map.customers.filter((c) => POWERED.has(state.cust[c.id].status)).map((c) => c.id));
+  for (const id of prevPowered) state.cust[id].everPowered = true;
+  if (prevPowered.size && state.stats.firstLightT == null) state.stats.firstLightT = 0;
   updateObjectives();
   events = [];
 

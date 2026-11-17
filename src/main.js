@@ -15,17 +15,23 @@ import { h, icon } from './ui/dom.js';
 import { createAudio } from './audio/synth.js';
 import { createSim, loadSim } from './sim/sim.js';
 import { rectDist, dist as d2 } from './sim/grid.js';
-import { BALANCE } from './data/balance.js';
-import { MISSION1 } from './data/mission1.js';
 import { S, fmt } from './data/strings.js';
-import { LINES, TUTORIAL, ENDING } from './data/dialogue.js';
+import { STAGES } from './missions/index.js';
+import { srcType } from './sim/power.js';
+import { windFrac } from './sim/weather.js';
 
 const params = new URLSearchParams(location.search);
 const TEST = params.has('test');
-const SAVE_KEY = 'gridforge.save.v1';
 const SET_KEY = 'gridforge.settings.v1';
-const map = MISSION1;
-const bal = BALANCE;
+const CAMPAIGN_KEY = 'gridforge.campaign.v1';
+// Stage 1 keeps the original save key so existing saves still load.
+const saveKey = (m) => (m.n === 1 ? 'gridforge.save.v1' : `gridforge.save.${m.key}.v1`);
+let M = STAGES[0];
+let map = M.map;
+let bal = M.bal;
+let LINES = M.ui.lines;
+let TUTORIAL = M.ui.tutorial;
+let SAVE_KEY = saveKey(M);
 
 // ------------------------------------------------------------------ settings
 const DEFAULTS = {
@@ -40,6 +46,7 @@ const DEFAULTS = {
   quality: 'high',
   tutorial: true,
   autoPause: true,
+  unlockAll: false,
 };
 const store = {
   get(k) {
@@ -77,10 +84,11 @@ try {
 }
 const { scene, camera, composer } = G;
 const rig = createCameraRig(camera, map.bounds);
-const world = createWorld(scene, map);
-const net = createNetworkView(scene, map);
+let world = createWorld(scene, map);
+let net = createNetworkView(scene, map);
 const fx = createFx(scene);
-const people = createPeople(scene, map);
+let people = createPeople(scene, map);
+rig.setMap(map.bounds, M.camera);
 const audio = createAudio();
 const uiEl = document.getElementById('ui');
 const labelsEl = document.getElementById('labels');
@@ -130,6 +138,8 @@ const hud = createHud(uiEl, labelsEl, {
   onOverlay: () => cycleOverlay(),
   onResetCamera: () => rig.reset(),
   xfmrName: (id) => xfmrName(id),
+  srcName: (id) => srcName(id),
+  onPanel: (k) => select({ kind: k }),
   onFocusObjective: (f) => {
     audio.play('click');
     if (f.sel) focus(f.sel);
@@ -138,6 +148,8 @@ const hud = createHud(uiEl, labelsEl, {
 });
 const inspector = createInspector(uiEl, { onAction: (a) => doAction(a) });
 const menus = createMenus(uiEl);
+hud.setMission(M);
+menus.setLearn(M.ui.learn);
 const tutEl = h('div', { id: 'tutorial', class: 'glass', hidden: true, role: 'region', 'aria-label': 'Tutorial' });
 uiEl.append(tutEl);
 audio.onCaption((t) => cfg.captions && hud.caption(t));
@@ -162,7 +174,17 @@ const xfmrName = (id) => {
   return i >= 0 ? `T${i + 1}` : id;
 };
 const custOf = (id) => map.customers.find((c) => c.id === id);
-const siteOf = (id) => (id === 'gen' ? map.generator.port : S_().nodes[id] || null);
+/** Definition of a generation source (map source, built site, or the Stage 1 generator). */
+const srcDef = (id) => (map.sources || []).find((s) => s.id === id) || app.sim?.state.built?.[id] || (id === 'gen' && map.generator ? { id: 'gen', type: 'diesel', ...map.generator } : null);
+const srcPort = (id) => srcDef(id)?.port || srcDef(id) || S_().nodes[id];
+const siteOf = (id) => (S_().gens?.[id] ? srcPort(id) : S_().nodes[id] || (S_().edges[id] ? app.sim.siteOf(id) : null));
+const srcName = (id) => {
+  const d = srcDef(id);
+  return d?.name || S.srcName?.[d?.type] || 'Generator';
+};
+/** First dispatchable unit (the "generator" of early stages). */
+const mainGen = () => Object.keys(S_().gens).find((id) => srcType(bal, S_().gens[id].type).dispatch) || null;
+const tierName = (t) => S.tierName[t] || t;
 const fill = (s, v) => s.replace(/\{(\w+)\}/g, (_, k) => (v[k] != null ? v[k] : ''));
 function say(key, vars = {}) {
   for (const [who, text] of LINES[key] || []) hud.say(who, fill(text, vars));
@@ -214,13 +236,21 @@ function toggleSound() {
 function select(sel) {
   app.selected = sel;
   if (sel && sel.kind === 'building') cmd({ type: 'inspect', target: sel.id }, true);
-  if (sel && sel.kind === 'gen') cmd({ type: 'inspect', target: 'gen' }, true);
+  if (sel && sel.kind === 'gen') cmd({ type: 'inspect', target: sel.id || 'gen' }, true);
+  if (sel && ['finance', 'trust', 'mix'].includes(sel.kind)) cmd({ type: 'inspect', target: sel.kind }, true);
   if (sel) audio.play('select');
   refreshInspector(true);
 }
 function selPos(sel) {
   if (!sel) return null;
-  if (sel.kind === 'gen') return { x: map.generator.x, z: map.generator.z, r: 11 };
+  if (sel.kind === 'gen') {
+    const d = srcDef(sel.id || 'gen');
+    return d ? { x: d.x, z: d.z, r: Math.max(d.w || 14, d.d || 10) * 0.75 } : null;
+  }
+  if (sel.kind === 'site') {
+    const d = (map.sites || []).find((x) => x.id === sel.id);
+    return d ? { x: d.x, z: d.z, r: Math.max(d.w, d.d) * 0.6 } : null;
+  }
   if (sel.kind === 'depot') return { x: map.depot.x, z: map.depot.z, r: 13 };
   if (sel.kind === 'building') {
     const c = custOf(sel.id);
@@ -251,7 +281,7 @@ function refreshInspector(force) {
   const now = performance.now();
   if (!force && now - lastInsp < 250) return;
   lastInsp = now;
-  inspector.render(app.mode === 'game' ? app.selected : null, S_(), { bal, xfmrName, crewJob: crewJobText, crewBusy, dropOf: (b) => app.sim.dropOf(b) });
+  inspector.render(app.mode === 'game' ? app.selected : null, S_(), { bal, mission: M, xfmrName, srcName, srcDef, crewJob: crewJobText, crewBusy, dropOf: (b) => app.sim.dropOf(b) });
   hud.el.alerts.classList.toggle('wide', inspector.el.hidden);
 }
 
@@ -263,7 +293,8 @@ function cmd(c, quiet = false) {
     audio.play('error');
     hud.alert({ id: 'cmd-err', level: 'warn', title: 'Can’t do that', text: S.reasons[r.reason] || r.reason, ttl: 4500 });
   }
-  if (r.ok && !quiet && ['startGen', 'order', 'repair', 'maintain', 'reset', 'policy', 'stopGen'].includes(c.type)) audio.play('confirm');
+  if (r.ok && !quiet && ['startGen', 'order', 'repair', 'maintain', 'reset', 'policy', 'stopGen', 'tariff', 'contract', 'battery', 'dispatchOrder', 'upgrade', 'program', 'switch', 'begin'].includes(c.type)) audio.play('confirm');
+  if (r.ok && !quiet && c.type === 'build') audio.play('build');
   refreshInspector(true);
   return r;
 }
@@ -278,7 +309,8 @@ function doAction(a) {
 }
 function confirmRemove(id) {
   const st = S_();
-  const what = st.nodes[id] ? (st.nodes[id].kind === 'xfmr' ? `transformer ${xfmrName(id)}` : 'this pole and its lines') : st.edges[id]?.kind === 'drop' ? 'this service drop' : 'this line';
+  const n0 = st.nodes[id];
+  const what = n0 ? (n0.kind === 'xfmr' ? `${n0.ratio === 'HV/MV' ? 'substation' : 'transformer'} ${xfmrName(id)}` : n0.kind === 'gen' ? srcName(id) : n0.tier === 'HV' ? 'this tower and its lines' : 'this pole and its lines') : st.edges[id]?.kind === 'drop' ? 'this service drop' : 'this line';
   menus.confirm(`Remove ${what}?`, 'You get 50% of the build cost back and all materials return to stock. Customers it feeds will lose power.', 'Remove', () => {
     const r = cmd({ type: 'remove', target: id });
     if (r.ok) {
@@ -298,8 +330,8 @@ function pick(p) {
   let best = null;
   let bd = 4.5;
   for (const id in st.nodes) {
-    if (id === 'gen') continue;
     const n = st.nodes[id];
+    if (n.kind === 'gen') continue;
     const d = Math.hypot(n.x - p.x, n.z - p.z);
     if (d < bd) {
       bd = d;
@@ -307,10 +339,15 @@ function pick(p) {
     }
   }
   if (best) return best;
-  const g = map.generator;
-  if (rectDist(p.x, p.z, g) < 3 || Math.hypot(p.x - g.port.x, p.z - g.port.z) < 4) return { kind: 'gen', id: 'gen' };
+  for (const id of Object.keys(st.gens)) {
+    const g = srcDef(id);
+    if (!g) continue;
+    const port = g.port || g;
+    if (rectDist(p.x, p.z, { x: g.x, z: g.z, w: g.w || 12, d: g.d || 10 }) < 3 || Math.hypot(p.x - port.x, p.z - port.z) < 4) return { kind: 'gen', id };
+  }
+  for (const s0 of map.sites || []) if (!st.gens[s0.id] && rectDist(p.x, p.z, s0) < 1) return { kind: 'site', id: s0.id };
   if (rectDist(p.x, p.z, map.depot) < 2) return { kind: 'depot', id: 'depot' };
-  for (const c of map.customers) if (rectDist(p.x, p.z, c) < 0.8) return { kind: 'building', id: c.id };
+  for (const c of map.customers) if (rectDist(p.x, p.z, c) < 0.8 && st.cust[c.id].active !== false) return { kind: 'building', id: c.id };
   let be = null;
   let bed = 2.4;
   for (const id in st.edges) {
@@ -385,9 +422,17 @@ function primaryClick(p, pk) {
       commitLine(p);
       break;
     }
+    case 'build':
+      if (pk?.kind === 'site') select(pk);
+      else {
+        audio.play('error');
+        lockTip('<b>Click a marked build site.</b>', true);
+      }
+      break;
+    case 'sub':
     case 'xfmr': {
       const id = pickNodeId(pk);
-      const r = cmd({ type: 'transformer', at: id && id !== 'gen' ? id : id === 'gen' ? 'gen' : { x: p.x, z: p.z } }, true);
+      const r = cmd({ type: app.tool === 'sub' ? 'substation' : 'transformer', at: id || { x: p.x, z: p.z } }, true);
       if (r.ok) {
         audio.play('build');
         fx.burst(S_().nodes[r.id].x, 0, S_().nodes[r.id].z, 'build', 20);
@@ -489,7 +534,7 @@ function lineTarget(p) {
 function commitLine(p) {
   const to = lineTarget(p);
   const start = S_().nodes[app.lineStart];
-  const r = cmd({ type: 'line', from: app.lineStart, to, tier: app.shift && start?.kind === 'xfmr' ? 'MV' : undefined }, true);
+  const r = cmd({ type: 'line', from: app.lineStart, to, tier: app.shift && start?.kind === 'xfmr' ? 'up' : undefined }, true);
   if (r.ok) {
     audio.play('build');
     for (const id of r.nodes.slice(1)) {
@@ -536,8 +581,8 @@ window.addEventListener('keydown', (e) => {
     return setSpeed(0);
   }
   if (k === '1' || k === '2' || k === '3') return setSpeed(+k);
-  const toolKeys = { v: 'select', l: 'line', t: 'xfmr', c: 'drop', x: 'remove' };
-  if (toolKeys[k]) return setTool(toolKeys[k]);
+  const toolKeys = { v: 'select', l: 'line', t: 'xfmr', b: 'sub', c: 'drop', g: 'build', x: 'remove' };
+  if (toolKeys[k] && M.tools.includes(toolKeys[k])) return setTool(toolKeys[k]);
   if (k === 'o') return cycleOverlay();
   if (k === 'q') return rig.rotate(-1);
   if (k === 'e') return rig.rotate(1);
@@ -582,25 +627,33 @@ function updateHover() {
   if (app.tool === 'line') {
     if (app.lineStart && p) {
       const start = st.nodes[app.lineStart];
-      const pl = app.sim.preview({ type: 'line', from: app.lineStart, to: lineTarget(p), tier: app.shift && start?.kind === 'xfmr' ? 'MV' : undefined });
-      const pts = pl.points && pl.points.length ? pl.points : [st.nodes[app.lineStart].kind === 'gen' ? map.generator.port : start, p];
+      const pl = app.sim.preview({ type: 'line', from: app.lineStart, to: lineTarget(p), tier: app.shift && start?.kind === 'xfmr' ? 'up' : undefined });
+      const pts = pl.points && pl.points.length ? pl.points : [st.nodes[app.lineStart].kind === 'gen' ? srcPort(app.lineStart) : start, p];
       net.showGhost(pts, pl.ok, performance.now() / 1000, pl.tier || 'LV');
-      const tierName = pl.tier === 'MV' ? '11 kV line' : '400 V line';
-      if (pl.ok) tip = `<b>${tierName}</b> · ${pl.newPoles} pole${pl.newPoles === 1 ? '' : 's'} · ${pl.meters} m<br><span class="cost">${fmt.cr(pl.cost)}</span> <span style="color:var(--muted)">· click to build</span>`;
+      const tierLabel = `${tierName(pl.tier || 'LV')} line`;
+      if (pl.ok) tip = `<b>${tierLabel}</b> · ${pl.newPoles} ${pl.tier === 'HV' ? 'tower' : 'pole'}${pl.newPoles === 1 ? '' : 's'} · ${pl.meters} m<br><span class="cost">${fmt.cr(pl.cost)}</span> <span style="color:var(--muted)">· click to build</span>`;
       else {
-        tip = `<b>${tierName}</b><br>${S.reasons[pl.reason] || pl.reason}${pl.cost ? ` <span class="cost">${fmt.cr(pl.cost)}</span>` : ''}`;
+        tip = `<b>${tierLabel}</b><br>${S.reasons[pl.reason] || pl.reason}${pl.cost ? ` <span class="cost">${fmt.cr(pl.cost)}</span>` : ''}`;
         bad = true;
       }
     } else {
       net.showGhost(null);
       const id = pickNodeId(pk);
-      tip = id ? `Start a line from <b>${id === 'gen' ? 'the generator (11 kV)' : st.nodes[id].kind === 'xfmr' ? `${xfmrName(id)} (400 V out)` : st.nodes[id].tier === 'MV' ? 'this 11 kV pole' : 'this 400 V pole'}</b>` : 'Click the generator, a pole or a transformer';
+      const nn = id ? st.nodes[id] : null;
+      tip = id ? `Start a line from <b>${nn.kind === 'gen' ? `${srcName(id)} (${tierName(nn.tier || 'MV')})` : nn.kind === 'xfmr' ? `${xfmrName(id)} (${tierName(nn.ratio === 'HV/MV' ? 'MV' : 'LV')} out${nn.ratio === 'HV/MV' ? '' : ''})` : `this ${tierName(nn.tier)} ${nn.tier === 'HV' ? 'tower' : 'pole'}`}</b>` : 'Click a generator, a pole or a transformer';
     }
-  } else if (app.tool === 'xfmr') {
+  } else if (app.tool === 'xfmr' || app.tool === 'sub') {
     const id = pickNodeId(pk);
-    const pl = app.sim.preview({ type: 'transformer', at: id || (p ? { x: p.x, z: p.z } : null) });
-    tip = pl.ok ? `<b>Mount transformer</b> · 11 kV → 400 V, 40 kW<br><span class="cost">${fmt.cr(pl.cost)}</span>` : `<b>Transformer</b><br>${S.reasons[pl.reason]}`;
+    const sub = app.tool === 'sub';
+    const pl = app.sim.preview({ type: sub ? 'substation' : 'transformer', at: id || (p ? { x: p.x, z: p.z } : null) });
+    tip = pl.ok ? (sub ? `<b>Build substation</b> · ${tierName('HV')} → ${tierName('MV')}, ${fmt.kw(bal.substation.ratingKW)}` : `<b>Mount transformer</b> · ${tierName('MV')} → ${tierName('LV')}, ${fmt.kw(bal.transformer.ratingKW)}`) + `<br><span class="cost">${fmt.cr(pl.cost)}</span>` : `<b>${sub ? 'Substation' : 'Transformer'}</b><br>${S.reasons[pl.reason] || pl.reason}`;
     bad = !pl.ok;
+  } else if (app.tool === 'build') {
+    if (pk?.kind === 'site') {
+      const site = map.sites.find((x) => x.id === pk.id);
+      const opt = site.options?.[0] || site;
+      tip = `<b>${site.name || 'Build site'}</b> · ${(site.options || [opt]).map((o) => `${S.srcName[o.type]} ${fmt.kw(o.kw)}`).join(' / ')}<br><span class="cost">${fmt.cr(opt.cost)}</span> <span style="color:var(--muted)">· click for options</span>`;
+    } else tip = 'Click a marked build site';
   } else if (app.tool === 'drop') {
     if (pk?.kind === 'building') {
       const pl = app.sim.preview({ type: 'drop', building: pk.id });
@@ -612,7 +665,8 @@ function updateHover() {
     if (pk && (pk.kind === 'node' || pk.kind === 'edge')) tip = '<b>Remove</b> · 50% refund, materials returned';
     else tip = 'Click a pole, line, drop or transformer';
   } else if (pk && app.tool === 'select') {
-    const name = pk.kind === 'gen' ? 'Diesel generator' : pk.kind === 'depot' ? 'Grid Ops depot' : pk.kind === 'building' ? custOf(pk.id).name : pk.kind === 'node' ? (st.nodes[pk.id].kind === 'xfmr' ? `Transformer ${xfmrName(pk.id)}` : st.nodes[pk.id].tier === 'MV' ? '11 kV pole' : '400 V pole') : st.edges[pk.id]?.kind === 'drop' ? 'Service drop' : 'Line';
+    const nn = pk.kind === 'node' ? st.nodes[pk.id] : null;
+    const name = pk.kind === 'gen' ? srcName(pk.id) : pk.kind === 'site' ? map.sites.find((x) => x.id === pk.id)?.name || 'Build site' : pk.kind === 'depot' ? 'Grid Ops depot' : pk.kind === 'building' ? custOf(pk.id).name : nn ? (nn.kind === 'xfmr' ? `${nn.ratio === 'HV/MV' ? 'Substation' : 'Transformer'} ${xfmrName(pk.id)}` : `${tierName(nn.tier)} ${nn.tier === 'HV' ? 'tower' : 'pole'}`) : st.edges[pk.id]?.kind === 'drop' ? 'Service drop' : `${tierName(st.edges[pk.id]?.tier)} line`;
     tip = `<b>${name}</b>`;
     if (pk.kind === 'building') {
       const cs = st.cust[pk.id];
@@ -649,11 +703,52 @@ function nextLearn() {
   });
 }
 function focusAct(id) {
-  return { label: 'Focus', fn: () => focus(id === 'gen' ? { kind: 'gen' } : { kind: 'node', id }) };
+  return { label: 'Focus', fn: () => focus(S_().gens[id] ? { kind: 'gen', id } : S_().edges[id] ? { kind: 'edge', id } : { kind: 'node', id }) };
 }
+function assetName(id, cap = false) {
+  const st = S_();
+  if (st.gens[id]) return id === 'gen' && map.generator ? (cap ? 'The generator' : 'the generator') : srcName(id);
+  if (st.edges[id]) return `the ${tierName(st.edges[id].tier)} line`;
+  if (st.nodes[id]?.kind === 'xfmr') return xfmrName(id);
+  return id;
+}
+/** Small API the missions use for their own event feedback and nudges. */
+const uiApi = {
+  get state() {
+    return S_();
+  },
+  get bal() {
+    return bal;
+  },
+  get map() {
+    return map;
+  },
+  get app() {
+    return app;
+  },
+  get hud() {
+    return hud;
+  },
+  audio,
+  fmt,
+  say,
+  learnOnce: (k, v) => learnOnce(k, v),
+  cmd: (c, q) => cmd(c, q),
+  focus: (sel) => focus(sel),
+  focusAct,
+  select: (sel) => select(sel),
+  xfmrName: (id) => xfmrName(id),
+  srcName: (id) => srcName(id),
+  custOf: (id) => custOf(id),
+  burst: (x, y, z, k, n) => fx.burst(x, y, z, k, n),
+};
 function handleEvents(evs) {
   const st = S_();
   for (const e of evs) {
+    if (M.ui.handles?.includes(e.type)) {
+      M.ui.onEvent(e, uiApi);
+      continue;
+    }
     switch (e.type) {
       case 'firstLight':
         audio.play('swell');
@@ -666,7 +761,8 @@ function handleEvents(evs) {
         break;
       case 'powerOff': {
         const shed = Object.entries(e.reasons).filter(([, r]) => r === 'shed').map(([id]) => custOf(id).name);
-        if (shed.length && e.t - (st.gen.startT ?? -999) > bal.generator.rampH * 60 + 1) hud.alert({ id: 'shed', level: 'warn', title: 'Supply short — load shed', text: `${shed.slice(0, 3).join(', ')}${shed.length > 3 ? ` +${shed.length - 3}` : ''} disconnected by your policy.`, ttl: 8000 });
+        const lastStart = Math.max(-999, ...Object.values(st.gens).map((g) => g.startT ?? -999));
+        if (shed.length && e.t - lastStart > (bal.generator?.rampH ?? 0.25) * 60 + 1) hud.alert({ id: 'shed', level: 'warn', title: 'Supply short — load shed', text: `${shed.slice(0, 3).join(', ')}${shed.length > 3 ? ` +${shed.length - 3}` : ''} disconnected by your policy.`, ttl: 8000 });
         break;
       }
       case 'genStart':
@@ -689,7 +785,7 @@ function handleEvents(evs) {
       case 'xfmrOverload': {
         const n = st.nodes[e.target];
         audio.play('warn');
-        hud.alert({ id: 'ovl-' + e.target, level: 'warn', title: `${xfmrName(e.target)} overloaded — ${fmt.pct(e.pct)}`, text: `Carrying ${fmt.kw(n.loadKW)} on a 40 kW rating. It trips in ~60 min unless its load drops.`, actions: [focusAct(e.target)] });
+        hud.alert({ id: 'ovl-' + e.target, level: 'warn', title: `${xfmrName(e.target)} overloaded — ${fmt.pct(e.pct)}`, text: `Carrying ${fmt.kw(n.loadKW)} on a ${fmt.kw(n.ratingKW)} rating. It trips in ~60 min unless its load drops.`, actions: [focusAct(e.target)] });
         learnOnce('overload', { name: xfmrName(e.target), kw: fmt.kw(n.loadKW), focus: () => focus({ kind: 'node', id: e.target }) });
         break;
       }
@@ -716,11 +812,21 @@ function handleEvents(evs) {
         break;
       }
       case 'fuelLow':
+        if (!st.gen && e.id) {
+          audio.play('warn');
+          hud.alert({ id: 'fuel', level: 'warn', title: `${srcName(e.id)}: fuel below 30 units`, text: 'Order a delivery now.', actions: [{ label: `Order fuel · ${bal.procurement.fuel.cost} ¢`, primary: true, fn: () => cmd({ type: 'order', item: 'fuel', target: e.id }) && hud.dismiss('fuel') }] });
+          break;
+        }
         audio.play('warn');
-        say('fuelLow', { h: Math.floor((st.gen.fuel * 20) / Math.max(1, st.flow.genKW)) });
+        say('fuelLow', { h: Math.floor(((st.gens[e.id || mainGen()]?.fuel ?? 0) * 20) / Math.max(1, st.flow.genKW)) });
         hud.alert({ id: 'fuel', level: 'warn', title: 'Fuel below 30 units', text: 'A delivery takes 6 hours. Order now to avoid a blackout.', actions: [{ label: 'Order fuel · 250 ¢', primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) && hud.dismiss('fuel') }, focusAct('gen')] });
         break;
       case 'noFuel':
+        if (!st.gen && e.id) {
+          audio.play('critical');
+          hud.alert({ id: 'fuel', level: 'critical', title: `${srcName(e.id)} out of fuel`, text: 'Order fuel now.', actions: [{ label: `Order fuel · ${bal.procurement.fuel.cost} ¢`, primary: true, fn: () => cmd({ type: 'order', item: 'fuel', target: e.id }) && hud.dismiss('fuel') }] });
+          break;
+        }
         audio.play('critical');
         say('noFuel');
         hud.alert({ id: 'fuel', level: 'critical', title: 'Generator out of fuel', text: 'The whole network is dark. Order fuel now.', actions: [{ label: 'Order fuel · 250 ¢', primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) && hud.dismiss('fuel') }, focusAct('gen')] });
@@ -754,35 +860,67 @@ function handleEvents(evs) {
         break;
       }
       case 'crewDispatched':
-        say('crewDispatched', { name: e.target === 'gen' ? 'the generator' : xfmrName(e.target), eta: fmt.dur(e.etaMin) });
+        say('crewDispatched', { name: assetName(e.target), eta: fmt.dur(e.etaMin) });
         break;
       case 'repairStart':
         audio.play('repair');
-        say('repairStart', { name: xfmrName(e.target) });
+        say('repairStart', { name: assetName(e.target) });
         break;
       case 'repaired': {
         audio.play('objective');
         hud.dismiss('fault-' + e.target);
-        say('repaired', { name: xfmrName(e.target) });
+        say('repaired', { name: assetName(e.target) });
         if (st.fault.target === e.target) learnOnce('restored', { name: xfmrName(e.target), dur: fmt.dur(st.fault.restoredT - st.fault.tripT) });
         break;
       }
       case 'maintStart':
-        say('maintStart', { name: e.target === 'gen' ? 'the generator' : xfmrName(e.target) });
+        say('maintStart', { name: assetName(e.target) });
         break;
       case 'maintained':
         audio.play('confirm');
-        say('maintained', { name: e.target === 'gen' ? 'The generator' : xfmrName(e.target) });
+        say('maintained', { name: assetName(e.target, true) });
         break;
       case 'objective':
         audio.play('objective');
-        hud.alert({ id: 'obj-' + e.id, level: 'good', title: 'Objective complete', text: S.objectives[e.id], ttl: 5000 });
+        hud.alert({ id: 'obj-' + e.id, level: 'good', title: 'Objective complete', text: M.objectives.find((o) => o.id === e.id)?.label || e.id, ttl: 5000 });
+        break;
+      case 'newCustomer': {
+        const c = custOf(e.id);
+        world.setActive(e.id, true);
+        fx.burst(c.x, 0, c.z, 'build', 18);
+        audio.play('connect');
+        break;
+      }
+      case 'lineOverload':
+        audio.play('warn');
+        hud.alert({ id: 'lovl-' + e.target, level: 'warn', title: `${tierName(st.edges[e.target]?.tier)} line overloaded — ${fmt.pct(e.pct)}`, text: `It trips in ~${e.inMin} min unless its load drops. Add a parallel route or move load to a higher-voltage line.`, actions: [{ label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
+        learnOnce('congestion');
+        break;
+      case 'lineTrip': {
+        const sp = siteOf(e.target);
+        audio.play('trip');
+        if (sp) fx.burst(sp.x, 8, sp.z, 'sparks', 40);
+        hud.dismiss('lovl-' + e.target);
+        hud.alert({ id: 'ltrip-' + e.target, level: 'critical', title: `${tierName(st.edges[e.target]?.tier)} line tripped on overload`, text: 'Customers beyond it are dark. Reduce the flow, then Reset the line.', actions: [{ label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
+        break;
+      }
+      case 'statement': {
+        audio.play('bill');
+        const net0 = e.net;
+        hud.alert({ id: 'bill', level: net0 >= 0 ? 'good' : 'warn', title: `Day ${e.day} statement: ${net0 >= 0 ? '+' : '−'}${fmt.cr(Math.abs(net0))}`, text: `Revenue ${fmt.cr(e.revenue)} · energy & fuel −${fmt.cr(e.energyCost + e.fuelBought)} · overhead −${fmt.cr(e.overhead)}${e.penalties ? ` · penalties −${fmt.cr(e.penalties)}` : ''}${e.programs ? ` · programs −${fmt.cr(e.programs)}` : ''}`, ttl: 9000, actions: [{ label: 'Details', fn: () => select({ kind: 'finance' }) }] });
+        learnOnce('statement', { rev: fmt.cr(e.revenue), net: fmt.cr(net0) });
+        break;
+      }
+      case 'retired':
+        audio.play('warn');
+        hud.alert({ id: 'ret-' + e.id, level: 'info', title: `${srcName(e.id)} retired`, text: 'It no longer produces power.', ttl: 9000 });
         break;
       case 'failWarn': {
-        const t = { fuel: ['Fuel out — mission at risk', 'Order fuel now. Without a delivery on its way the mission fails in'], clinic: ['Clinic dark — mission at risk', 'Restore power to the clinic. The mission fails in'], bankrupt: ['Credits nearly gone', 'Without income the mission fails in'], deadline: ['Final day', 'The district must be stable by midnight — time left:'] }[e.cause];
+        const crit = e.id ? custOf(e.id)?.name : 'The clinic';
+        const t = { fuel: ['Fuel out — mission at risk', 'Order fuel now. Without a delivery on its way the mission fails in'], clinic: [`${crit} dark — mission at risk`, `Restore power to ${crit}. The mission fails in`], bankrupt: ['Credits nearly gone', 'Without income the mission fails in'], deadline: ['Final day', 'The mission must be complete by midnight — time left:'], trust: [`Public trust collapsing (${S.clsName?.[e.cls] || e.cls})`, 'The regulator will revoke your licence in'], ...(M.ui.failWarn || {}) }[e.cause] || ['Mission at risk', 'Time left:'];
         audio.play('critical');
-        hud.alert({ id: 'fail-' + e.cause, level: 'critical', title: t[0], text: `${t[1]} ${fmt.dur(e.minutesLeft)}.`, actions: e.cause === 'fuel' ? [{ label: 'Order fuel · 250 ¢', primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) }] : e.cause === 'clinic' ? [{ label: 'Focus clinic', fn: () => focus({ kind: 'building', id: 'clinic' }) }] : [] });
-        if (e.cause === 'clinic') say('clinicWarn', { h: Math.round(st.cust.clinic.outMin / 60) });
+        hud.alert({ id: 'fail-' + e.cause, level: 'critical', title: t[0], text: `${t[1]} ${fmt.dur(e.minutesLeft)}.`, actions: e.cause === 'fuel' ? [{ label: `Order fuel · ${bal.procurement.fuel.cost} ¢`, primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) }] : e.cause === 'clinic' ? [{ label: 'Focus', fn: () => focus({ kind: 'building', id: e.id || 'clinic' }) }] : [] });
+        if (e.cause === 'clinic') say('clinicWarn', { h: Math.round((st.cust[e.id || 'clinic']?.outMin || 0) / 60) });
         break;
       }
       case 'stableReset':
@@ -792,7 +930,10 @@ function handleEvents(evs) {
       case 'fail':
         showResult();
         break;
+      default:
+        break;
     }
+    M.ui.onEvent?.(e, uiApi);
   }
 }
 function forecastCheck(force) {
@@ -800,12 +941,12 @@ function forecastCheck(force) {
   for (const id in st.nodes) {
     const n = st.nodes[id];
     if (n.kind !== 'xfmr' || n.state !== 'ok') continue;
-    if (n.forecastPeakKW > bal.transformer.ratingKW + 0.01) {
+    if (n.forecastPeakKW > (n.ratingKW || bal.transformer.ratingKW) + 0.01) {
       const key = 'fc' + id + Math.floor(st.clock / 1440);
       if (app.nudges[key] && !force) continue;
       app.nudges[key] = true;
       say('forecast', { name: xfmrName(id), kw: fmt.kw(n.forecastPeakKW) });
-      hud.alert({ id: 'fc-' + id, level: 'warn', title: `${xfmrName(id)} forecast: ${fmt.kw(n.forecastPeakKW)} at the evening peak`, text: 'Its rating is 40 kW. Split its customers across another transformer before 18:00.', actions: [focusAct(id)], ttl: 15000 });
+      hud.alert({ id: 'fc-' + id, level: 'warn', title: `${xfmrName(id)} forecast: ${fmt.kw(n.forecastPeakKW)} at the evening peak`, text: `Its rating is ${fmt.kw(n.ratingKW || bal.transformer.ratingKW)}. ${bal.upgrades?.xfmr100 && !n.upgraded && n.ratio !== 'HV/MV' ? 'Upgrade it or split' : 'Split'} its customers across another transformer before ${n.forecastPeakHour}:00.`, actions: [focusAct(id)], ttl: 15000 });
     }
   }
 }
@@ -821,7 +962,7 @@ function timedNudges() {
     app.nudges.margin = true;
     say('marginNudge');
   }
-  if (st.gen.condition < 85 && !app.nudges.service && !st.objectives.service) {
+  if (st.gen && st.gen.condition < 85 && !app.nudges.service && !st.objectives.service) {
     app.nudges.service = true;
     say('serviceNudge');
   }
@@ -837,13 +978,16 @@ function schedulePower() {
   const st = S_();
   const now = performance.now() / 1000;
   for (const c of map.customers) {
+    if (!st.cust[c.id]) return;
     const s = st.cust[c.id].status;
     const on = s === 'on' || s === 'partial';
     const was = app.shown[c.id];
     if (was === s) continue;
     const wasOn = was === 'on' || was === 'partial';
     if (on && !wasOn) {
-      const delay = cfg.reduceMotion ? 0 : Math.min(2.8, (Math.hypot(c.x - map.generator.port.x, c.z - map.generator.port.z) * 1.25) / 90) + 0.25;
+      const src = Object.keys(st.gens).map(srcPort).filter(Boolean);
+      const dmin = src.length ? Math.min(...src.map((q) => Math.hypot(c.x - q.x, c.z - q.z))) : 0;
+      const delay = cfg.reduceMotion ? 0 : Math.min(2.8, (dmin * 1.25) / 90) + 0.25;
       if (!app.pending.has(c.id)) app.pending.set(c.id, now + delay);
     } else {
       app.pending.delete(c.id);
@@ -852,6 +996,10 @@ function schedulePower() {
     }
   }
   for (const [id, at] of app.pending) {
+    if (!st.cust[id]) {
+      app.pending.delete(id);
+      continue;
+    }
     if (now >= at) {
       app.pending.delete(id);
       const s = st.cust[id].status;
@@ -862,18 +1010,20 @@ function schedulePower() {
     }
   }
   // street lights by cluster
+  const zc = map.townCenterZ ?? 0;
   const frac = (pred) => {
     const cs = map.customers.filter(pred);
-    return cs.filter((c) => ['on', 'partial'].includes(app.shown[c.id])).length / cs.length;
+    return cs.length ? cs.filter((c) => ['on', 'partial'].includes(app.shown[c.id])).length / cs.length : 0;
   };
   const dark = app.mode !== 'game' || app.nightK > 0.55;
-  world.setGroupLevel('street-n', dark && frac((c) => c.z < 0) >= 0.5 ? 1 : 0);
-  world.setGroupLevel('street-s', dark && frac((c) => c.z > 0) >= 0.5 ? 1 : 0);
+  world.setGroupLevel('street-n', dark && frac((c) => c.z < zc) >= 0.5 ? 1 : 0);
+  world.setGroupLevel('street-s', dark && frac((c) => c.z > zc) >= 0.5 ? 1 : 0);
 }
 
 // ------------------------------------------------------------------ tutorial
 function tutDone(step) {
   const st = S_();
+  if (step.done) return step.done(st, app);
   switch (step.id) {
     case 'gen':
       return !!st.inspected.gen;
@@ -933,9 +1083,8 @@ function updateTutorial() {
   const tr = tutEl.getBoundingClientRect();
   inspector.el.style.maxHeight = `${Math.max(220, tr.top - 90)}px`;
   const t = step.target;
-  if (t?.world === 'gen') fx.marker(map.generator.x, map.generator.z, 13);
-  else if (t?.world === 'clinic') fx.marker(custOf('clinic').x, custOf('clinic').z, 13);
-  else if (t?.world === 'marker') fx.marker(t.x, t.z, 6);
+  const tp = tutPoint(t);
+  if (tp) fx.marker(tp.x, tp.z, tp.r);
   else fx.marker(null);
 }
 function skipStep() {
@@ -951,13 +1100,32 @@ function endTutorial() {
   updateTutorial();
   audio.play('click');
 }
+/** World point for a tutorial target: generator, a customer, a site, a node or a marker. */
+function tutPoint(t) {
+  if (!t?.world) return null;
+  if (t.world === 'gen') {
+    const d = srcDef(t.id || 'gen');
+    return d && { x: d.x, z: d.z, r: 13, y: 12, label: t.label || 'Generator' };
+  }
+  if (t.world === 'clinic' || t.world === 'cust') {
+    const c = custOf(t.id || 'clinic');
+    return c && { x: c.x, z: c.z, r: Math.max(c.w, c.d) * 0.8, y: 14, label: t.label || c.name };
+  }
+  if (t.world === 'site') {
+    const d = map.sites.find((x) => x.id === t.id);
+    return d && { x: d.x, z: d.z, r: Math.max(d.w, d.d) * 0.6, y: 10, label: t.label || d.name };
+  }
+  if (t.world === 'node') {
+    const n = typeof t.find === 'function' ? t.find(S_()) : S_().nodes[t.id];
+    return n && { x: n.x, z: n.z, r: 7, y: 14, label: t.label || 'Here' };
+  }
+  return { x: t.x, z: t.z, r: t.r || 6, y: 8, label: t.label || 'Run the line to here' };
+}
 function tutLabel() {
   if (app.tut < 0) return null;
-  const t = TUTORIAL[app.tut]?.target;
-  if (!t?.world) return null;
-  const p = t.world === 'gen' ? { x: map.generator.x, z: map.generator.z, y: 12 } : t.world === 'clinic' ? { x: custOf('clinic').x, z: custOf('clinic').z, y: 14 } : { x: t.x, z: t.z, y: 8 };
-  const txt = { gen: 'Generator', clinic: 'Community Clinic', marker: 'Run the line to here' }[t.world];
-  return { key: 'tut', x: p.x, y: p.y, z: p.z, html: `${icon('target')}${txt}`, cls: 'tut' };
+  const p = tutPoint(TUTORIAL[app.tut]?.target);
+  if (!p) return null;
+  return { key: 'tut', x: p.x, y: p.y, z: p.z, html: `${icon('target')}${p.label}`, cls: 'tut' };
 }
 
 // ------------------------------------------------------------------ labels
@@ -987,19 +1155,20 @@ function buildLabels() {
       html = `${icon('wrench')}${name} · ${Math.round(n.condition)}%`;
     } else if (n.loadPct >= 85 || app.overlay === 'capacity') {
       cls = n.loadPct >= 100 ? 'bad' : n.loadPct >= 85 ? 'warn' : 'good';
-      html = `${icon(n.loadPct >= 85 ? 'warn' : 'gauge')}${name} · ${Math.round(n.loadKW)}/40 kW`;
+      html = `${icon(n.loadPct >= 85 ? 'warn' : 'gauge')}${name} · ${fmt.kw(n.loadKW)}/${fmt.kw(n.ratingKW)}`;
     }
-    if (notable || band !== 'planning') L.push({ key: 'x' + id, x: n.x, y: n.onPole ? 12.5 : 4.5, z: n.z, html, cls: cls + (notable ? '' : ' mini') });
+    if (notable || band !== 'planning') L.push({ key: 'x' + id, x: n.x, y: n.ratio === 'HV/MV' ? 14 : n.onPole ? 12.5 : 4.5, z: n.z, html, cls: cls + (notable ? '' : ' mini') });
   }
   for (const c of map.customers) {
     const cs = st.cust[c.id];
     const b = world.buildings[c.id];
+    if (cs.active === false) continue;
     const showAll = app.overlay === 'outages';
     if (cs.status === 'on' && !showAll) continue;
-    if (cs.status === 'unconnected' && !showAll && !(c.type === 'clinic' && st.started)) continue;
+    if (cs.status === 'unconnected' && !showAll && !(c.type === 'clinic' && st.started) && !(cs.appearedT != null)) continue;
     if (!showAll && band === 'planning' && cs.status !== 'xfmrDown' && c.type !== 'clinic') continue;
     const ok = cs.status === 'on';
-    const short = { unconnected: 'not connected', nopath: 'no route', xfmrDown: 'transformer out', noFuel: 'no fuel', genOff: 'generator off', shed: 'shed', partial: 'low supply', on: 'powered' }[cs.status];
+    const short = { unconnected: 'not connected', nopath: 'no route', xfmrDown: 'transformer out', lineDown: 'line down', noFuel: 'no fuel', genOff: 'no supply', shed: 'shed', partial: 'low supply', on: 'powered' }[cs.status];
     L.push({ key: 'b' + c.id, x: c.x, y: b.height + 3.5, z: c.z, html: `${icon(ok ? 'bolt' : 'dark')}${c.type === 'home' ? '' : c.name.split(' ').slice(-1)[0] + ' · '}${short}`, cls: (ok ? 'good' : cs.status === 'unconnected' ? '' : 'bad') + ' mini' });
   }
   const j = st.crew.job;
@@ -1007,9 +1176,21 @@ function buildLabels() {
     const tp = people.truck.position;
     L.push({ key: 'crew', x: tp.x, y: 5, z: tp.z, html: `${icon('truck')}Crew · ${j.phase === 'travel' ? 'ETA ' + fmt.dur(j.remain) : j.phase === 'work' ? fmt.dur(j.remain) + ' left' : j.phase === 'standby' ? 'standing by' : 'returning'}`, cls: 'crew' });
   }
-  if (st.gen.status !== 'running' && band !== 'planning' && !(app.tut >= 0 && TUTORIAL[app.tut]?.target?.world === 'gen')) {
-    L.push({ key: 'gen', x: map.generator.x, y: 9, z: map.generator.z, html: `${icon('gen')}Generator · ${S.genState[st.gen.status]}`, cls: st.gen.status === 'nofuel' ? 'bad' : st.gen.status === 'starting' ? 'warn' : '' });
+  for (const gid of Object.keys(st.gens)) {
+    const g = st.gens[gid];
+    const T = srcType(bal, g.type);
+    const d = srcDef(gid);
+    if (!d || !T.dispatch || g.status === 'running' || band === 'planning' || g.retired) continue;
+    if (app.tut >= 0 && TUTORIAL[app.tut]?.target?.world === 'gen') continue;
+    L.push({ key: 'gen' + gid, x: d.x, y: 9, z: d.z, html: `${icon('gen')}${gid === 'gen' && map.generator ? 'Generator' : srcName(gid)} · ${S.genState[g.status]}`, cls: g.status === 'nofuel' ? 'bad' : g.status === 'starting' ? 'warn' : '' });
   }
+  if (app.tool === 'build' || band !== 'planning')
+    for (const s0 of map.sites || []) {
+      if (st.gens[s0.id] || (s0.unlockAt != null && st.clock < s0.unlockAt)) continue;
+      if (app.tool !== 'build' && band === 'planning') continue;
+      L.push({ key: 'site' + s0.id, x: s0.x, y: 3, z: s0.z, html: `${icon('plus')}${s0.name || 'Build site'}`, cls: app.tool === 'build' ? 'tut mini' : 'mini' });
+    }
+  M.ui.labels?.(L, uiApi, band);
   if (app.lineStart && st.nodes[app.lineStart]) {
     const p = siteOf(app.lineStart);
     L.push({ key: 'ls', x: p.x, y: 3, z: p.z, html: 'start', cls: 'tut mini' });
@@ -1033,7 +1214,7 @@ function clearScreens() {
 
 function startIntro() {
   app.mode = 'intro';
-  app.sim = createSim({ seed: 1337 });
+  app.sim = createSim({ seed: 1337, mission: M });
   resetVisuals();
   let t0 = performance.now() / 1000;
   rig.cinematic = (t) => {
@@ -1056,17 +1237,19 @@ function startMenu() {
   tutEl.hidden = true;
   fx.marker(null);
   fx.select(null);
-  if (!app.sim || app.sim.state.started) {
-    app.sim = createSim({ seed: 1337 });
+  if (!app.sim || app.sim.state.started || app.sim.mission !== M) {
+    app.sim = createSim({ seed: 1337, mission: M });
     resetVisuals();
   }
   const t0 = performance.now() / 1000;
   rig.cinematic = (t) => ({ target: new THREE.Vector3(10, 0, 0), yaw: 0.8 + (t - t0) * 0.025, pitch: 0.62, dist: 250 });
-  const save = store.get(SAVE_KEY);
+  const last = lastSave();
   const m = menus.mainMenu({
-    hasSave: !!save,
-    onContinue: () => (audio.play('confirm'), startGame(save)),
-    onNew: () => (audio.play('confirm'), startGame(null)),
+    hasSave: !!last,
+    continueLabel: last ? `Continue · ${last.m.stageName}` : null,
+    onContinue: () => (audio.play('confirm'), startGame(last.m, last.save)),
+    onNew: () => (audio.play('confirm'), startGame(STAGES[0], null)),
+    onCampaign: () => (audio.play('click'), openCampaign()),
     onHow: () => menus.howTo(),
     onSettings: () => openSettings(true),
     onCredits: () => menus.credits(),
@@ -1075,13 +1258,75 @@ function startMenu() {
   fade(false);
 }
 
+// ------------------------------------------------------------------ campaign
+function campaign() {
+  const c = store.get(CAMPAIGN_KEY) || {};
+  return { unlocked: c.unlocked || 1, best: c.best || {}, last: c.last || null };
+}
+function unlockedCount() {
+  return cfg.unlockAll ? STAGES.length : Math.min(STAGES.length, campaign().unlocked);
+}
+function lastSave() {
+  const c = campaign();
+  const order = c.last ? [STAGES.find((x) => x.key === c.last), ...STAGES] : STAGES;
+  for (const m of order) {
+    if (!m) continue;
+    const save = store.get(saveKey(m));
+    if (save && save.mission === m.id) return { m, save };
+  }
+  return null;
+}
+function recordVictory(m, score) {
+  const c = campaign();
+  c.best[m.key] = Math.max(c.best[m.key] || 0, score);
+  c.unlocked = Math.max(c.unlocked, Math.min(STAGES.length, m.n + 1));
+  store.set(CAMPAIGN_KEY, c);
+}
+function openCampaign() {
+  const c = campaign();
+  menus.campaign({
+    stages: STAGES.map((m, i) => ({ n: m.n, key: m.key, name: m.name, stageName: m.stageName, region: m.region, blurb: m.blurb, learns: m.learns, best: c.best[m.key] || null, unlocked: i < unlockedCount(), hasSave: !!store.get(saveKey(m)) })),
+    onPick: (key, resume) => {
+      const m = STAGES.find((x) => x.key === key);
+      audio.play('confirm');
+      startGame(m, resume ? store.get(saveKey(m)) : null);
+    },
+  });
+}
+
+/** Swap the 3D world to another stage's map. */
+function buildStage(m) {
+  if (m === M && world) return;
+  for (const e of stageEmitters) fx.removeEmitter(e);
+  stageEmitters.length = 0;
+  fx.clearParticles();
+  world.dispose();
+  net.dispose();
+  people.dispose();
+  M = m;
+  map = m.map;
+  bal = m.bal;
+  LINES = m.ui.lines;
+  TUTORIAL = m.ui.tutorial;
+  SAVE_KEY = saveKey(m);
+  world = createWorld(scene, map);
+  net = createNetworkView(scene, map);
+  people = createPeople(scene, map);
+  builtViews.clear();
+  rig.setMap(map.bounds, m.camera);
+  setupEmitters();
+  hud.setMission(m);
+  menus.setLearn(m.ui.learn);
+  if (window.__gf) window.__gf.world = world;
+}
+
 function openSettings(fromMenu) {
   hold(+1);
   menus.settings(
     cfg,
     () => applySettings(),
     () => hold(-1),
-    { onJumpEnding: () => (menus.closeAll(), (app.hold = 0), jumpToEnding()) },
+    { onJumpEnding: () => (menus.closeAll(), (app.hold = 0), jumpToEnding()), stageName: M.stageName },
   );
   void fromMenu;
 }
@@ -1089,26 +1334,37 @@ function openSettings(fromMenu) {
 function resetVisuals() {
   app.shown = {};
   app.pending.clear();
-  for (const c of map.customers) world.setPower(c.id, 'off');
+  for (const id of [...builtViews.keys()]) {
+    world.removeSource(id);
+    builtViews.delete(id);
+  }
+  for (const c of map.customers) {
+    world.setPower(c.id, 'off');
+    world.setActive(c.id, c.appearAt == null || app.sim?.state.cust[c.id]?.active !== false);
+  }
   world.setGroupLevel('street-n', 0);
   world.setGroupLevel('street-s', 0);
   for (const id of [...map.customers.map((c) => c.id), 'street-n', 'street-s']) if (world.groups[id]) world.groups[id].level = 0;
 }
 
-function startGame(save) {
+function startGame(m, save) {
   clearScreens();
   fade(true);
   setTimeout(() => {
+    buildStage(m || M);
+    const c = campaign();
+    c.last = M.key;
+    store.set(CAMPAIGN_KEY, c);
     let sim = null;
     if (save) {
       try {
-        sim = loadSim(save);
+        sim = loadSim(save, { mission: M });
       } catch (e) {
         console.warn('Save incompatible, starting new game', e);
         store.del(SAVE_KEY);
       }
     }
-    app.sim = sim || createSim({ seed: 1337 });
+    app.sim = sim || createSim({ seed: 1337, mission: M });
     app.mode = 'game';
     app.paused = false;
     app.speed = 1;
@@ -1131,14 +1387,19 @@ function startGame(save) {
     hud.setLegend('flow');
     setTool('select');
     rig.cinematic = null;
-    rig.target.set(-22, 0, 8);
-    rig.goal.set(-22, 0, 8);
+    const cam = M.camera || {};
+    rig.target.set(cam.x ?? -22, 0, cam.z ?? 8);
+    rig.goal.set(cam.x ?? -22, 0, cam.z ?? 8);
     rig.yaw = rig.yawGoal = Math.PI / 4;
-    rig.dist = rig.distGoal = 310;
+    rig.dist = rig.distGoal = cam.dist ?? 310;
     rig.pitch = rig.pitchGoal = 0.92;
     app.sim.drainEvents();
+    syncBuilt();
     schedulePower();
-    if (!sim) say('intro');
+    if (!sim) {
+      if (M.n > 1) menus.briefing(M, () => say('intro'));
+      else say('intro');
+    }
     else hud.alert({ id: 'cont', level: 'info', title: 'Game restored', text: `Day ${fmt.clock(S_().clock).day}, ${fmt.clock(S_().clock).time}.`, ttl: 4000 });
     fade(false);
     canvas.focus({ preventScroll: true });
@@ -1157,7 +1418,7 @@ function openPause() {
     onRestart: () => {
       app.hold = 0;
       store.del(SAVE_KEY);
-      startGame(null);
+      startGame(M, null);
     },
     onMenu: () => {
       app.hold = 0;
@@ -1183,37 +1444,29 @@ function showResult() {
     app.hold = 1;
     if (r.outcome === 'victory') {
       audio.play('victory');
+      recordVictory(M, r.score.total);
       menus.victory(r, {
+        mission: M,
         onContinue: () => startEnding(app.sim),
-        onReplay: () => startGame(null),
+        onReplay: () => startGame(M, null),
         onMenu: () => startMenu(),
       });
     } else {
       audio.play('fail');
-      menus.fail(r, { onRetry: () => startGame(null), onMenu: () => startMenu() });
+      menus.fail(r, { mission: M, onRetry: () => startGame(M, null), onMenu: () => startMenu() });
     }
   }, 1400);
 }
 
-function jumpToEnding() {
-  // Review-build shortcut: play the reference strategy to victory, then show the ending.
-  const sim = createSim({ seed: 1337 });
-  let last = null;
-  const at = (x, z) => Object.keys(sim.state.nodes).find((id) => Math.hypot(sim.state.nodes[id].x - x, sim.state.nodes[id].z - z) < 1);
-  for (const s of map.reference) {
-    const from = s.from === '@last' ? last : typeof s.from === 'string' && s.from.startsWith('@node:') ? at(...s.from.slice(6).split(',').map(Number)) : s.from;
-    if (s.type === 'line') last = sim.cmd({ type: 'line', from, to: s.to }).last;
-    else if (s.type === 'transformer') sim.cmd({ type: 'transformer', at: s.at === '@last' ? last : s.at });
-    else sim.cmd({ type: 'drop', building: s.building });
-  }
-  sim.cmd({ type: 'inspect', target: 'gen' });
-  sim.cmd({ type: 'inspect', target: 'demand' });
-  sim.cmd({ type: 'startGen' });
-  for (let i = 0; i < 5 * 1440 && !sim.state.result; i++) {
-    sim.tick();
-    if (sim.state.gen.fuel < 40 && !sim.state.orders.length) sim.cmd({ type: 'order', item: 'fuel' });
-    for (const e of sim.drainEvents()) if (e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
-  }
+function jumpToEnding(m = M) {
+  // Review-build shortcut: play the mission's reference strategy to victory, then show the ending.
+  buildStage(m);
+  const sim = createSim({ seed: 1337, mission: M });
+  M.autoplay(sim);
+  if (sim.state.result?.outcome === 'victory') recordVictory(M, sim.state.result.score.total);
+  app.sim = sim;
+  resetVisuals();
+  syncBuilt();
   startEnding(sim);
 }
 
@@ -1227,7 +1480,10 @@ function startEnding(sim) {
   tutEl.hidden = true;
   fx.marker(null);
   fx.select(null);
-  for (const c of map.customers) world.setPower(c.id, sim.state.cust[c.id].status === 'off' ? 'off' : 'on');
+  for (const c of map.customers) {
+    world.setActive(c.id, sim.state.cust[c.id].active !== false);
+    world.setPower(c.id, sim.state.cust[c.id].active === false ? 'off' : 'on');
+  }
   world.setGroupLevel('street-n', 1);
   world.setGroupLevel('street-s', 1);
   const t0 = performance.now() / 1000;
@@ -1238,24 +1494,34 @@ function startEnding(sim) {
     const k = d / 60;
     const out = Math.min(1, Math.max(0, (d - 18) / 16));
     const e = out * out * (3 - 2 * out);
+    const E = M.ending || {};
+    const cx = E.x ?? 20;
+    const cz = E.z ?? 4;
     return {
-      target: new THREE.Vector3(20 - k * 10 + e * 10, 0, 4 - e * 40),
+      target: new THREE.Vector3(cx - k * 10 + e * (E.outDX ?? 10), 0, cz + e * (E.outDZ ?? -40)),
       yaw: 2.3 + d * (cfg.reduceMotion ? 0.006 : 0.03),
       pitch: 0.62 - Math.min(0.2, k * 0.4) + e * 0.32,
-      dist: 260 - Math.min(90, d * 3) + e * 560,
+      dist: (E.dist ?? 260) - Math.min(90, d * 3) + e * (E.outDist ?? 560),
     };
   };
   fireflies.on = true;
   const score = sim.state.result?.score || { ending: 'reliable', total: 0 };
-  const M = sim.state.result?.metrics;
+  const MET = sim.state.result?.metrics;
+  const ENDING = M.ui.ending;
   const lines = [...ENDING.common, ENDING[score.ending]];
-  if (M) for (const k of ['split', 'preDispatch', 'ordered', 'serviced']) if (M.decisions[k] && lines.length < 5) lines.push(ENDING.decisions[k]);
+  if (MET?.decisions) for (const k of Object.keys(ENDING.decisions || {})) if (MET.decisions[k] && lines.length < 5) lines.push(ENDING.decisions[k]);
   lines.push(ENDING.next);
   audio.setWarmth(13);
+  const isLast = M.n === STAGES.length;
   app.ending = menus.ending({
-    kicker: `Stage 1 complete · ${S.endings[score.ending]}`,
-    title: 'The First District is lit',
+    kicker: `${M.stageName.split('·')[0].trim()} complete · ${S.endings[score.ending]}`,
+    title: M.ui.endTitle,
     lines,
+    nextLabel: !isLast && STAGES[M.n] ? `Next: ${STAGES[M.n].stageName}` : null,
+    onNext: !isLast && STAGES[M.n] ? () => {
+      fireflies.on = false;
+      startGame(STAGES[M.n], null);
+    } : null,
     onEnd: () => {
       fireflies.on = false;
       fade(true);
@@ -1273,21 +1539,52 @@ window.addEventListener('beforeunload', () => autosave());
 window.addEventListener('pointerdown', () => audio.unlock(), { capture: true });
 
 // ------------------------------------------------------------------ ambient emitters
-const smoke = fx.addEmitter({
-  rate: 0,
-  make: () => {
-    const p = world.generator.stackTop;
-    const p2 = Math.random() < 0.5 ? world.generator.stackTop : world.generator.stackTop2 || p;
-    const q = Math.random() < 0.5 ? p : p2;
-    return { puff: true, x: q.x + (Math.random() - 0.5) * 0.6, y: q.y, z: q.z + (Math.random() - 0.5) * 0.6, vx: 0.7 + Math.random() * 0.6, vy: 2.4 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.6, g: 0, life: 4.2, s0: 1.8, s1: 6.5, c: new THREE.Color(0.86, 0.84, 0.8), opacity: 0.9, fade: 0 };
-  },
-});
-for (const ct of world.coolingTowers) {
-  fx.addEmitter({
-    rate: 6,
-    make: () => ({ puff: true, x: ct.x + (Math.random() - 0.5) * ct.r, y: ct.top, z: ct.z + (Math.random() - 0.5) * ct.r, vx: 1.4, vy: 3.5 + Math.random() * 2, vz: 0.3, g: 0, life: 7, s0: 9, s1: 26, c: new THREE.Color(0.92, 0.91, 0.88), opacity: 0.92, fade: 0 }),
-  });
+// smoke from every stack (generators, plants, mills) and steam from cooling towers
+const stageEmitters = [];
+const builtViews = new Map(); // site-built sources currently shown
+const puff = (q, big) => ({ puff: true, x: q.x + (Math.random() - 0.5) * (big ? 1.2 : 0.6), y: q.y, z: q.z + (Math.random() - 0.5) * (big ? 1.2 : 0.6), vx: 0.7 + Math.random() * 0.6, vy: 2.4 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.6, g: 0, life: big ? 6 : 4.2, s0: big ? 3 : 1.8, s1: big ? 11 : 6.5, c: new THREE.Color(0.86, 0.84, 0.8), opacity: 0.9, fade: 0 });
+function addStackEmitter(id, meta) {
+  if (!meta.stacks?.length) return;
+  const big = meta.type === 'coal' || meta.customer;
+  const e = fx.addEmitter({ rate: 0, make: () => puff(meta.stacks[Math.floor(Math.random() * meta.stacks.length)], big) });
+  e.src = id;
+  e.meta = meta;
+  stageEmitters.push(e);
 }
+function addSteam(ct, src) {
+  const e = fx.addEmitter({
+    rate: 6,
+    make: () => ({ puff: true, x: ct.x + (Math.random() - 0.5) * ct.r, y: ct.top, z: ct.z + (Math.random() - 0.5) * ct.r, vx: 1.4, vy: 3.5 + Math.random() * 2, vz: 0.3, g: 0, life: 7, s0: ct.r, s1: ct.r * 2.8, c: new THREE.Color(0.92, 0.91, 0.88), opacity: 0.92, fade: 0 }),
+  });
+  e.steamSrc = src;
+  stageEmitters.push(e);
+}
+function setupEmitters() {
+  for (const id in world.sources) {
+    addStackEmitter(id, world.sources[id]);
+    for (const ct of world.sources[id].coolingTowers || []) addSteam(ct, id);
+  }
+  for (const ct of world.coolingTowers) if (!Object.values(world.sources).some((m) => m.coolingTowers?.includes(ct))) addSteam(ct, null);
+}
+/** Show site-built sources (solar farms, turbines, batteries…) as the player builds them. */
+function syncBuilt() {
+  const st = S_();
+  for (const id in st.built) {
+    if (builtViews.has(id) || world.sources[id]) continue;
+    const meta = world.buildSource(st.built[id]);
+    builtViews.set(id, meta);
+    addStackEmitter(id, meta);
+    if (app.mode === 'game') fx.burst(st.built[id].x, 0, st.built[id].z, 'build', 30);
+  }
+  for (const id of [...builtViews.keys()]) {
+    if (!st.built[id]) {
+      for (const e of stageEmitters.filter((x) => x.src === id)) fx.removeEmitter(e);
+      world.removeSource(id);
+      builtViews.delete(id);
+    }
+  }
+}
+setupEmitters();
 const fireflies = fx.addEmitter({
   rate: 18,
   make: () => {
@@ -1375,18 +1672,51 @@ function frame() {
   net.update(st, { overlay: app.mode === 'game' ? app.overlay : 'flow', time, dt, reduceMotion: cfg.reduceMotion, cb: cfg.cbPatterns, bal, night: app.nightK });
   world.update(dt, time, nightK, cfg.reduceMotion);
   people.update(st, dt, time, nightK, cfg.reduceMotion, siteOf);
-  const g = st.gen;
-  const genOn = g.status === 'running' || g.status === 'starting';
-  smoke.rate = genOn ? 3 + (st.flow.genKW / 100) * 9 : 0;
-  smoke.on = genOn;
-  world.generator.fan.rotation.y += dt * (genOn ? 6 + st.flow.genKW / 6 : 0);
-  world.generator.beaconMat.color.setRGB(...(g.status === 'running' ? (g.servicing ? [2.4, 1.4, 0.2] : [0.3, 2.4, 0.8]) : g.status === 'starting' ? [2.4, 1.4, 0.2] : [2.4, 0.25, 0.2]));
+  if (Object.keys(st.built || {}).length !== builtViews.size) syncBuilt();
+  let fossilOut = 0;
+  let fossilRated = 0;
+  for (const e of stageEmitters) {
+    if (e.steamSrc !== undefined) {
+      const sg = e.steamSrc ? st.gens[e.steamSrc] : null;
+      e.on = !e.steamSrc || (sg && sg.outKW > 0);
+      continue;
+    }
+    const sg = st.gens[e.src];
+    if (sg) {
+      const on = sg.status === 'running' || sg.status === 'starting';
+      const r = sg.outKW / Math.max(1, sg.kw ?? srcType(bal, sg.type).maxKW ?? 100);
+      e.on = on && !sg.retired;
+      e.rate = e.on ? 3 + r * 9 : 0;
+    } else {
+      const cs = st.cust[e.src];
+      e.on = !!cs && cs.status === 'on';
+      e.rate = e.on ? 4 : 0;
+    }
+  }
+  for (const id in st.gens) {
+    const g = st.gens[id];
+    const T = srcType(bal, g.type);
+    const meta = world.sources[id];
+    const on = g.status === 'running' || g.status === 'starting';
+    if (T.dispatch && !T.reservoir) {
+      fossilOut += g.outKW || 0;
+      fossilRated += g.kw ?? T.maxKW ?? 100;
+    }
+    if (!meta) continue;
+    if (meta.fan) meta.fan.rotation.y += dt * (on ? 6 + (g.outKW || 0) / 6 : 0);
+    if (meta.beaconMat) meta.beaconMat.color.setRGB(...(g.status === 'running' ? (g.servicing ? [2.4, 1.4, 0.2] : [0.3, 2.4, 0.8]) : g.status === 'starting' ? [2.4, 1.4, 0.2] : [2.4, 0.25, 0.2]));
+    for (const t of meta.turbines || []) t.speed = g.damaged ? 0 : 0.3 + 2.2 * windFrac(st.weather || { wind: 6 });
+    if (meta.ledMat) meta.ledMat.emissiveIntensity = 0.3 + (g.soc / Math.max(1, g.kwh)) * 1.2;
+  }
+  const genOn = fossilOut > 0;
+  const g = { status: genOn ? 'running' : 'off' };
+  void g;
   fx.update(dt, { time });
   const sp = selPos(app.mode === 'game' ? app.selected : null);
   fx.select(sp ? sp.x : null, sp?.z, sp?.r);
 
   // --- audio
-  audio.setHum(genOn ? 0.3 + (st.flow.genKW / 100) * 0.7 : 0);
+  audio.setHum(genOn ? 0.3 + Math.min(1, fossilOut / Math.max(1, fossilRated)) * 0.7 : 0);
   let maxLoad = 0;
   for (const id in st.nodes) if (st.nodes[id].kind === 'xfmr') maxLoad = Math.max(maxLoad, st.nodes[id].loadPct || 0);
   audio.setBuzz(maxLoad / 100);
@@ -1399,7 +1729,7 @@ function frame() {
     updateHover();
     if (time - lastUi > 0.12) {
       lastUi = time;
-      hud.update(st, { paused: app.paused || app.hold > 0, speed: app.speed, muted: !cfg.sound });
+      hud.update(st, { paused: app.paused || app.hold > 0, speed: app.speed, muted: !cfg.sound, bal });
       refreshInspector(false);
       updateTutorial();
     }
@@ -1423,11 +1753,17 @@ if (TEST) {
     app,
     world,
     rig,
+    stages: STAGES,
+    get mission() {
+      return M;
+    },
+    startStage: (n, save = null) => startGame(STAGES[n - 1], save),
+    jumpToEnding: (n) => jumpToEnding(n ? STAGES[n - 1] : M),
     focusAt: (x, z, d) => rig.flyTo(x, z, d),
     worldToScreen(target) {
       let p;
       if (typeof target === 'string') {
-        if (target === 'gen') p = { x: map.generator.x, z: map.generator.z };
+        if (app.sim.state.gens[target]) p = srcDef(target);
         else if (target === 'depot') p = map.depot;
         else p = custOf(target) || app.sim.state.nodes[target];
       } else p = target;
@@ -1438,8 +1774,7 @@ if (TEST) {
     skipHours(hrs) {
       for (let i = 0; i < hrs * 60 && !app.sim.state.result; i++) app.sim.tick();
     },
-    startGame: () => startGame(null),
-    jumpToEnding,
+    startGame: () => startGame(M, null),
   };
 }
 

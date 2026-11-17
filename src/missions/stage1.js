@@ -94,6 +94,25 @@ export default {
       state.stableMin = 0;
     }
   },
+  /** Reference strategy (tests, review "Play ending"): build, start, refuel, repair. */
+  autoplay(sim) {
+    let last = null;
+    const at = (x, z) => Object.keys(sim.state.nodes).find((id) => Math.hypot(sim.state.nodes[id].x - x, sim.state.nodes[id].z - z) < 1);
+    for (const s of MISSION1.reference) {
+      const from = s.from === '@last' ? last : typeof s.from === 'string' && s.from.startsWith('@node:') ? at(...s.from.slice(6).split(',').map(Number)) : s.from;
+      if (s.type === 'line') last = sim.cmd({ type: 'line', from, to: s.to }).last;
+      else if (s.type === 'transformer') sim.cmd({ type: 'transformer', at: s.at === '@last' ? last : s.at });
+      else sim.cmd({ type: 'drop', building: s.building });
+    }
+    sim.cmd({ type: 'inspect', target: 'gen' });
+    sim.cmd({ type: 'inspect', target: 'demand' });
+    sim.cmd({ type: 'startGen' });
+    for (let i = 0; i < 5 * 1440 && !sim.state.result; i++) {
+      sim.tick();
+      if (sim.state.gen.fuel < 40 && !sim.state.orders.length) sim.cmd({ type: 'order', item: 'fuel' });
+      for (const e of sim.drainEvents()) if (e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
+    }
+  },
   score: (state) => computeScore(state),
   metrics: (state) => computeMetrics(state),
   ui: { tutorial: TUTORIAL, lines: LINES, ending: ENDING, endTitle: 'The First District is lit' },

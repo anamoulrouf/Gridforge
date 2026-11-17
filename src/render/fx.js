@@ -227,5 +227,12 @@ export function createFx(scene) {
     tutRing.userData.r = r;
   }
 
-  return { spawn, burst, addEmitter, update, select, marker };
+  function removeEmitter(e) {
+    const i = emitters.indexOf(e);
+    if (i >= 0) emitters.splice(i, 1);
+  }
+  function clearParticles() {
+    for (const p of parts) p.alive = false;
+  }
+  return { spawn, burst, addEmitter, removeEmitter, clearParticles, update, select, marker };
 }

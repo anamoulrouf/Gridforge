@@ -65,10 +65,11 @@ export function createMenus(ui) {
   }
 
   // ---------------------------------------------------------------- main menu
-  function mainMenu({ hasSave, onContinue, onNew, onHow, onSettings, onCredits }) {
+  function mainMenu({ hasSave, continueLabel, onContinue, onNew, onCampaign, onHow, onSettings, onCredits }) {
     const items = [
-      hasSave ? h('button', { class: 'btn primary', onclick: onContinue, html: `${icon('play')}${S.menu.continue}` }) : null,
+      hasSave ? h('button', { class: 'btn primary', onclick: onContinue, html: `${icon('play')}${esc(continueLabel || S.menu.continue)}` }) : null,
       h('button', { class: `btn ${hasSave ? '' : 'primary'}`, onclick: onNew, html: `${icon('bolt')}${S.menu.newGame}` }),
+      onCampaign ? h('button', { class: 'btn', onclick: onCampaign, html: `${icon('layers')}Campaign` }) : null,
       h('button', { class: 'btn', onclick: onHow, html: `${icon('info')}${S.menu.howTo}` }),
       h('button', { class: 'btn', onclick: onSettings, html: `${icon('gear')}${S.menu.settings}` }),
       h('button', { class: 'btn', onclick: onCredits, html: `${icon('chat')}${S.menu.credits}` }),
@@ -79,7 +80,7 @@ export function createMenus(ui) {
       h('div', { class: 'nav', html: `<span>Strategy · Simulation</span><span>Single-player · Offline</span>` }),
       h('h1', { html: `GRID<span>FORGE</span>` }),
       h('div', { class: 'tag', text: S.tagline }),
-      h('div', { class: 'stage', text: `${S.stageName} — ${S.missionName}` }),
+      h('div', { class: 'stage', text: 'Campaign · five regions · from the first light to a 100% green city' }),
       h('div', { class: 'items' }, items),
       h('div', { class: 'foot', text: 'Numbers are simplified, illustrative models — not engineering data.' }),
     );
@@ -153,8 +154,9 @@ export function createMenus(ui) {
       select('quality', 'Graphics quality', [['high', 'High (bloom + shadows)'], ['medium', 'Medium'], ['low', 'Low (fastest)']]),
       toggle('tutorial', 'Guided tutorial', 'Step-by-step help in a new game'),
       toggle('autoPause', 'Pause on major events', 'Learning panels pause time while open'),
+      toggle('unlockAll', 'Unlock all stages', 'Review switch — play any campaign stage without finishing the previous one'),
     );
-    const dev = extras.onJumpEnding ? h('div', { class: 'setting' }, h('label', { html: 'Review build: jump to ending<small>Development shortcut — plays the ending sequence</small>' }), h('button', { class: 'btn small', onclick: () => extras.onJumpEnding() }, 'Play ending')) : null;
+    const dev = extras.onJumpEnding ? h('div', { class: 'setting' }, h('label', { html: `Review build: jump to ending<small>Development shortcut — plays ${esc(extras.stageName || 'the current stage')}’s reference strategy and ending</small>` }), h('button', { class: 'btn small', onclick: () => extras.onJumpEnding() }, 'Play ending')) : null;
     const m = modal([h('div', { class: 'kicker', text: 'Options' }), h('h2', { text: S.menu.settings }), rows, dev, h('div', { class: 'row-actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, 'Done'))], { onClose });
     return m;
   }
@@ -198,8 +200,16 @@ export function createMenus(ui) {
   }
 
   // ---------------------------------------------------------------- learning panel (What happened / Why / What can I do / Real world)
+  let extraLearn = {};
+  function setLearn(o) {
+    extraLearn = o || {};
+  }
   function learn(key, vars, onClose) {
-    const L = LEARN[key];
+    const L = extraLearn[key] || LEARN[key];
+    if (!L) {
+      onClose?.();
+      return null;
+    }
     const fill = (s) => s.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? vars[k] : ''));
     const m = modal(
       [
@@ -220,6 +230,7 @@ export function createMenus(ui) {
   // ---------------------------------------------------------------- results
   function metricsGrid(M) {
     const cell = (k, v) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+    if (M.cells) return h('div', { class: 'metrics', html: M.cells.map(([k, v]) => cell(esc(k), v)).join('') });
     return h('div', {
       class: 'metrics',
       html: [
@@ -236,14 +247,15 @@ export function createMenus(ui) {
     });
   }
 
-  function victory(result, { onContinue, onReplay, onMenu }) {
+  function victory(result, { mission, onContinue, onReplay, onMenu }) {
     const sc = result.score;
     const part = (k, label, max) => `<div class="part"><span>${label}</span><div class="meter"><i style="width:${(sc.parts[k] / max) * 100}%"></i></div><span class="n">${sc.parts[k]}/${max}</span></div>`;
+    const spec = sc.spec || [['coverage', 'Coverage', 30], ['reliability', 'Reliability', 30], ['restoration', 'Restoration', 15], ['finance', 'Finance', 15], ['efficiency', 'Efficiency', 10]];
     const m = modal(
       [
-        h('div', { class: 'kicker', text: 'Mission complete' }),
-        h('h2', { text: `${S.missionName} — ${S.endings[sc.ending]}` }),
-        h('div', { class: 'score', html: `<div class="total">${sc.total}<small> / 100</small></div><div class="parts">${part('coverage', 'Coverage', 30)}${part('reliability', 'Reliability', 30)}${part('restoration', 'Restoration', 15)}${part('finance', 'Finance', 15)}${part('efficiency', 'Efficiency', 10)}</div>` }),
+        h('div', { class: 'kicker', text: `${mission?.stageName || 'Mission'} complete` }),
+        h('h2', { text: `${mission?.name || S.missionName} — ${S.endings[sc.ending]}` }),
+        h('div', { class: 'score', html: `<div class="total">${sc.total}<small> / 100</small></div><div class="parts">${spec.map(([k, l, mx]) => part(k, l, mx)).join('')}</div>` }),
         metricsGrid(result.metrics),
         h('div', { class: 'row-actions' }, h('button', { class: 'btn', onclick: () => (m.close(true), onMenu()) }, 'Main menu'), h('button', { class: 'btn', onclick: () => (m.close(true), onReplay()) }, 'Replay'), h('button', { class: 'btn primary', onclick: () => (m.close(true), onContinue()) }, 'Continue')),
       ],
@@ -252,8 +264,8 @@ export function createMenus(ui) {
     return m;
   }
 
-  function fail(result, { onRetry, onMenu }) {
-    const F = S.failCause[result.cause];
+  function fail(result, { mission, onRetry, onMenu }) {
+    const F = mission?.ui?.failCause?.[result.cause] || S.failCause[result.cause] || { title: 'Mission failed', body: '', tip: '' };
     const m = modal(
       [
         h('div', { class: 'kicker bad', text: 'Mission failed' }),
@@ -269,10 +281,15 @@ export function createMenus(ui) {
   }
 
   // ---------------------------------------------------------------- ending overlay
-  function ending({ title, kicker, lines, onEnd }) {
+  function ending({ title, kicker, lines, onEnd, nextLabel, onNext }) {
     const narr = h('div', { class: 'narr' });
     const ttl = h('div', { class: 'ttl', html: `<div class="k">${esc(kicker)}</div><h2>${esc(title)}</h2>` });
-    const acts = h('div', { class: 'end-actions' }, h('button', { class: 'btn primary', onclick: () => finish() }, 'Return to main menu'));
+    const acts = h(
+      'div',
+      { class: 'end-actions' },
+      onNext ? h('button', { class: 'btn primary', onclick: () => (timers.forEach(clearTimeout), el.remove(), onNext()) }, nextLabel) : null,
+      h('button', { class: `btn ${onNext ? '' : 'primary'}`, onclick: () => finish() }, 'Return to main menu'),
+    );
     const skip = h('button', { class: 'btn small skipend', onclick: () => jump() }, 'Skip');
     const el = h('div', { id: 'ending' }, h('div', { class: 'bars' }), ttl, narr, acts, skip);
     ui.append(el);
@@ -315,5 +332,49 @@ export function createMenus(ui) {
     return { el, finish, jump };
   }
 
-  return { modal, closeTop, closeAll, isOpen, intro, mainMenu, howTo, settings, credits, pause, confirm, learn, victory, fail, ending };
+  // ---------------------------------------------------------------- campaign (stage select)
+  function campaign({ stages, onPick }) {
+    const grid = h('div', { class: 'stages' });
+    for (const st of stages) {
+      const tile = h(
+        'div',
+        { class: `stage-tile ${st.unlocked ? '' : 'locked'}` },
+        h('div', { class: 'st-n', text: `Stage ${st.n}` }),
+        h('h3', { text: st.name }),
+        h('div', { class: 'st-region', text: `${st.stageName.split('·')[1]?.trim() || ''} · ${st.region}` }),
+        h('p', { text: st.blurb }),
+        h('ul', { class: 'st-learns', html: (st.learns || []).map((l) => `<li>${esc(l)}</li>`).join('') }),
+        h('div', { class: 'st-best', html: st.best ? `${icon('check')}Best score <b>${st.best}</b>` : st.unlocked ? 'Not completed yet' : `${icon('alert')}Complete Stage ${st.n - 1} to unlock` }),
+        h(
+          'div',
+          { class: 'row-actions' },
+          st.unlocked && st.hasSave ? h('button', { class: 'btn small', onclick: () => (m.close(true), onPick(st.key, true)) }, 'Continue') : null,
+          h('button', { class: 'btn small primary', disabled: !st.unlocked || null, 'aria-label': `Play stage ${st.n}: ${st.name}`, onclick: () => (m.close(true), onPick(st.key, false)) }, st.best ? 'Replay' : 'Play'),
+        ),
+      );
+      grid.append(tile);
+    }
+    const m = modal([h('div', { class: 'kicker', text: 'Campaign' }), h('h2', { text: 'Build the grid of the future, region by region' }), grid, h('div', { class: 'row-actions' }, h('button', { class: 'btn', onclick: () => m.close() }, 'Back'))], { cls: 'campaign' });
+    return m;
+  }
+
+  /** Opening briefing for a stage (GDD §6 stage structure). */
+  function briefing(mission, onClose) {
+    const b = mission.ui.briefing || {};
+    const m = modal(
+      [
+        h('div', { class: 'kicker', text: mission.stageName }),
+        h('h2', { text: mission.name }),
+        h('p', { html: b.text || esc(mission.blurb) }),
+        b.goals ? h('div', { class: 'sec', html: `<h5>Your goals</h5><ul class="blist">${b.goals.map((g) => `<li>${g}</li>`).join('')}</ul>` }) : null,
+        b.newSystems ? h('div', { class: 'sec real', html: `<h5>New in this stage</h5><ul class="blist">${b.newSystems.map((g) => `<li>${g}</li>`).join('')}</ul>` }) : null,
+        h('div', { class: 'simplified', text: 'Hover any objective in the left rail for step-by-step help.' }),
+        h('div', { class: 'row-actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, 'Begin')),
+      ],
+      { cls: 'learn', onClose },
+    );
+    return m;
+  }
+
+  return { modal, closeTop, closeAll, isOpen, intro, mainMenu, howTo, settings, credits, pause, confirm, learn, setLearn, victory, fail, ending, campaign, briefing };
 }

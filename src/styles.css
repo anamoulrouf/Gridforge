@@ -352,3 +352,24 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 #objcard .oc-acts { display: flex; justify-content: flex-end; margin-top: 10px; }
 #objcard kbd, .obj kbd { color: var(--text); }
 @media (max-width: 1180px) { #objcard { width: 320px; } }
+
+/* ---------- campaign ---------- */
+.modal.campaign { width: min(1180px, 96vw); }
+.stages { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 14px; }
+.stage-tile { background: rgba(255, 236, 205, 0.05); border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.stage-tile.locked { opacity: 0.55; }
+.stage-tile .st-n { font-size: 0.72em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--lime); font-weight: 800; }
+.stage-tile h3 { margin: 0; font-size: 1.02em; line-height: 1.2; }
+.stage-tile .st-region { font-size: 0.78em; color: var(--muted); }
+.stage-tile p { font-size: 0.84em; margin: 4px 0; color: #e6dacb; line-height: 1.4; }
+.stage-tile .st-learns { margin: 0 0 4px; padding-left: 16px; font-size: 0.78em; color: var(--muted); line-height: 1.4; }
+.stage-tile .st-best { font-size: 0.8em; color: var(--muted); display: flex; gap: 5px; align-items: center; margin-top: auto; }
+.stage-tile .st-best svg { width: 14px; height: 14px; }
+.stage-tile .row-actions { margin-top: 6px; justify-content: flex-start; }
+@media (max-width: 1180px) { .stages { grid-template-columns: repeat(3, 1fr); } }
+.tariff-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 6px; align-items: center; margin: 4px 0; font-size: 0.9em; }
+.tariff-row .tl { color: var(--text); }
+.tariff-row .tb { color: var(--muted); font-size: 0.82em; }
+.tariff-row b { font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
+.tariff-row .btn.small { padding: 0.2em 0.6em; }
+.build-opt { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 236, 205, 0.05); }

@@ -35,11 +35,19 @@ export function createCameraRig(camera, bounds) {
   rig.rotate = (steps) => {
     rig.yawGoal += (steps * Math.PI) / 2;
   };
+  rig.home = { x: -10, z: 4, dist: 300 };
   rig.reset = () => {
-    rig.goal.set(-10, 0, 4);
+    rig.goal.set(rig.home.x, 0, rig.home.z);
     rig.yawGoal = Math.round((rig.yawGoal - Math.PI / 4) / (Math.PI * 2)) * Math.PI * 2 + Math.PI / 4;
-    rig.distGoal = 300;
+    rig.distGoal = rig.home.dist;
     rig.pitchGoal = 0.92;
+  };
+  /** Switch to another stage map: bounds, zoom range and home view. */
+  rig.setMap = (b, home = {}) => {
+    bounds = b;
+    const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+    rig.maxDist = Math.max(460, span * 1.25);
+    rig.home = { x: home.x ?? (b.minX + b.maxX) / 2, z: home.z ?? (b.minZ + b.maxZ) / 2, dist: home.dist ?? 300 };
   };
   rig.flyTo = (x, z, dist) => {
     rig.goal.set(x, 0, z);
@@ -50,7 +58,7 @@ export function createCameraRig(camera, bounds) {
     rig.goal.x = THREE.MathUtils.clamp(rig.goal.x, bounds.minX - 20, bounds.maxX + 20);
     rig.goal.z = THREE.MathUtils.clamp(rig.goal.z, bounds.minZ - 20, bounds.maxZ + 20);
   }
-  rig.zoomBand = () => (rig.dist < 140 ? 'asset' : rig.dist < 280 ? 'district' : 'planning');
+  rig.zoomBand = () => (rig.dist < 140 ? 'asset' : rig.dist < Math.max(280, rig.maxDist * 0.55) ? 'district' : 'planning');
 
   rig.update = (dt, time) => {
     if (rig.cinematic) {

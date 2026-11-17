@@ -3,15 +3,17 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { glowTexture, hazardTexture } from './textures.js';
+import { sourceDef } from '../sim/grid.js';
 import { rectDist } from '../sim/grid.js';
 
-const H = { MV: 9.8, LV: 7.6, port: 4.4 };
+const H = { HV: 19, MV: 9.8, LV: 7.6, port: 4.4 };
 // Energised network = electric sunflower yellow (matches the hazard-sign accent of the art refs).
 export const COL = {
   cyan: new THREE.Color(1.25, 0.86, 0.12), // energised 400 V
   mv: new THREE.Color(1.15, 0.92, 0.38), // energised 11 kV (gold, drawn double)
   lv: new THREE.Color(1.25, 0.86, 0.12),
   tierMV: new THREE.Color(1.3, 0.42, 0.1),
+  tierHV: new THREE.Color(0.85, 0.3, 1.3),
   dead: new THREE.Color(0.11, 0.09, 0.075),
   amber: new THREE.Color(1.3, 0.5, 0.06),
   red: new THREE.Color(1.4, 0.1, 0.08),
@@ -124,22 +126,104 @@ export function createNetworkView(scene, map) {
     });
   }
 
+  const portOf = (state, id) => sourceDef(state, id)?.port || state.nodes[id];
   function attachPoint(state, nodeId, tier) {
     const n = state.nodes[nodeId];
-    if (n.kind === 'gen') return new THREE.Vector3(map.generator.port.x, H.port, map.generator.port.z);
+    if (n.kind === 'gen') {
+      const p = portOf(state, nodeId);
+      return new THREE.Vector3(p.x, tier === 'HV' ? 12 : H.port, p.z);
+    }
+    if (n.kind === 'xfmr' && n.ratio === 'HV/MV') return new THREE.Vector3(n.x, tier === 'HV' ? 11 : 6.5, n.z);
     if (n.kind === 'xfmr' && !n.onPole) return new THREE.Vector3(n.x, 2.2, n.z);
-    return new THREE.Vector3(n.x, tier === 'MV' ? H.MV : H.LV - 0.2, n.z);
+    return new THREE.Vector3(n.x, tier === 'HV' ? H.HV - 1.4 : tier === 'MV' ? H.MV : H.LV - 0.2, n.z);
   }
   const groundPoint = (state, nodeId) => {
     const n = state.nodes[nodeId];
-    return n.kind === 'gen' ? map.generator.port : n;
+    return n.kind === 'gen' ? portOf(state, nodeId) : n;
   };
+  // lattice transmission tower (reso/graphic image 84/86) and substation yard (image 85/87)
+  const latMat = new THREE.MeshStandardMaterial({ color: '#6b7278', roughness: 0.55, metalness: 0.35 });
+  const legGeo = new THREE.CylinderGeometry(0.14, 0.26, H.HV, 6);
+  const braceGeo = new RoundedBoxGeometry(2.8, 0.18, 0.18, 1, 0.04);
+  const hvArmGeo = new RoundedBoxGeometry(9.6, 0.36, 0.36, 2, 0.08);
+  const strGeo = new THREE.CylinderGeometry(0.16, 0.16, 1.4, 8);
+  const subPadGeo = new RoundedBoxGeometry(18, 0.3, 14, 2, 0.15);
+  const subTankGeo = new RoundedBoxGeometry(3.6, 3.4, 2.8, 2, 0.35);
+  for (const g of [legGeo, braceGeo, hvArmGeo, strGeo, subPadGeo, subTankGeo]) g.userData.shared = true;
+  const padMat = new THREE.MeshStandardMaterial({ color: '#b8b2a6', roughness: 1 });
+  const fenceMat = new THREE.MeshStandardMaterial({ color: '#c9ccce', roughness: 0.5, metalness: 0.4 });
+  function hvTower(g) {
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const leg = new THREE.Mesh(legGeo, latMat);
+      leg.position.set(sx * 0.95, H.HV / 2, sz * 0.95);
+      leg.rotation.set(sz * 0.06, 0, -sx * 0.06);
+      leg.castShadow = true;
+      g.add(leg);
+    }
+    for (const y of [H.HV * 0.3, H.HV * 0.55, H.HV * 0.78]) {
+      const b = new THREE.Mesh(braceGeo, latMat);
+      b.position.y = y;
+      b.scale.x = 1 - y / H.HV / 2;
+      g.add(b);
+      const b2 = b.clone();
+      b2.rotation.y = Math.PI / 2;
+      g.add(b2);
+    }
+    const arm = new THREE.Mesh(hvArmGeo, latMat);
+    arm.position.y = H.HV - 0.5;
+    arm.castShadow = true;
+    g.add(arm);
+    for (const ox of [-4, 0, 4]) {
+      const ins = new THREE.Mesh(strGeo, insMat);
+      ins.position.set(ox, H.HV - 1.2, 0);
+      g.add(ins);
+    }
+  }
+  function substationYard(g) {
+    const pad = new THREE.Mesh(subPadGeo, padMat);
+    pad.position.y = 0.15;
+    pad.receiveShadow = true;
+    g.add(pad);
+    for (const sx of [-3.2, 3.2]) {
+      const t = new THREE.Mesh(subTankGeo, canMat);
+      t.position.set(sx, 2, 1.5);
+      t.castShadow = true;
+      g.add(t);
+      for (const ox of [-1, 0, 1]) {
+        const b = new THREE.Mesh(insGeo, insMat);
+        b.position.set(sx + ox, 4.0, 1.5);
+        g.add(b);
+      }
+      const hz = new THREE.Mesh(hazGeo, hazMat);
+      hz.position.set(sx, 2.2, 2.92);
+      g.add(hz);
+    }
+    for (const sx of [-5, 5]) {
+      for (const sz of [-4, 4]) {
+        const leg = new THREE.Mesh(legGeo, latMat);
+        leg.scale.y = 0.6;
+        leg.position.set(sx, H.HV * 0.3, sz - 2);
+        g.add(leg);
+      }
+    }
+    const gantry = new THREE.Mesh(hvArmGeo, latMat);
+    gantry.position.set(0, 11, -2);
+    g.add(gantry);
+    for (const [fx, fz, len, rot] of [[0, -7, 18, 0], [0, 7, 18, 0], [-9, 0, 14, 1], [9, 0, 14, 1]]) {
+      const f = new THREE.Mesh(new RoundedBoxGeometry(len, 1.6, 0.12, 1, 0.04), fenceMat);
+      f.position.set(fx, 0.95, fz);
+      if (rot) f.rotation.y = Math.PI / 2;
+      g.add(f);
+    }
+  }
 
   function makeNode(state, n) {
     const g = new THREE.Group();
     g.position.set(n.x, 0, n.z);
     const v = { group: g, kind: n.kind, ring: null, ringMat: null, dot: null, dotMat: null };
-    if (n.kind === 'pole' || (n.kind === 'xfmr' && n.onPole)) {
+    if (n.kind === 'pole' && n.tier === 'HV') hvTower(g);
+    else if (n.kind === 'xfmr' && n.ratio === 'HV/MV') substationYard(g);
+    else if (n.kind === 'pole' || (n.kind === 'xfmr' && n.onPole)) {
       const tier = n.kind === 'xfmr' ? 'MV' : n.tier;
       const hgt = H[tier];
       const p = new THREE.Mesh(poleGeo[tier], woodMat);
@@ -157,8 +241,11 @@ export function createNetworkView(scene, map) {
       }
     }
     if (n.kind === 'xfmr') {
+      const sub = n.ratio === 'HV/MV';
       const y = n.onPole ? H.MV - 3.4 : 1.1;
-      if (n.onPole) {
+      if (sub) {
+        /* substation yard built above */
+      } else if (n.onPole) {
         const can = new THREE.Mesh(canGeo, canMat);
         can.position.set(1.05, y, 0);
         can.castShadow = true;
@@ -193,7 +280,8 @@ export function createNetworkView(scene, map) {
       v.ringMat.userData.own = true;
       v.ring = new THREE.Mesh(ringGeo, v.ringMat);
       v.ring.rotation.x = Math.PI / 2;
-      v.ring.position.set(n.onPole ? 1.05 : 0, n.onPole ? y + 1.35 : 2.45, 0);
+      v.ring.position.set(sub ? 0 : n.onPole ? 1.05 : 0, sub ? 6 : n.onPole ? y + 1.35 : 2.45, 0);
+      if (sub) v.ring.scale.setScalar(3);
       g.add(v.ring);
     }
     // glowing node dot on the ground (the reference's bright junctions)
@@ -204,7 +292,8 @@ export function createNetworkView(scene, map) {
     v.dot.renderOrder = 3;
     const s = n.kind === 'xfmr' ? 6.5 : n.kind === 'gen' ? 7 : 3.8;
     v.dot.scale.set(s, s, 1);
-    v.dot.position.set(n.kind === 'gen' ? map.generator.port.x - n.x : 0, 0.3, n.kind === 'gen' ? map.generator.port.z - n.z : 0);
+    const gp = n.kind === 'gen' ? portOf(state, n.id) : null;
+    v.dot.position.set(gp ? gp.x - n.x : 0, 0.3, gp ? gp.z - n.z : 0);
     g.add(v.dot);
     root.add(g);
     return v;
@@ -241,20 +330,20 @@ export function createNetworkView(scene, map) {
     const L = Math.hypot(dirX, dirZ) || 1;
     const px = -dirZ / L;
     const pz = dirX / L;
-    const offsets = e.kind === 'line' && e.tier === 'MV' ? [-1.3, 0, 1.3] : [0];
-    const r = e.kind === 'drop' ? 0.1 : e.tier === 'MV' ? 0.13 : 0.17;
+    const offsets = e.kind === 'line' && e.tier === 'HV' ? [-4, 0, 4] : e.kind === 'line' && e.tier === 'MV' ? [-1.3, 0, 1.3] : [0];
+    const r = e.kind === 'drop' ? 0.1 : e.tier === 'HV' ? 0.16 : e.tier === 'MV' ? 0.13 : 0.17;
     for (const o of offsets) {
-      const curve = catenary(new THREE.Vector3(a.x + px * o, a.y, a.z + pz * o), new THREE.Vector3(b.x + px * o, b.y, b.z + pz * o), Math.min(1.6, L * 0.035));
+      const curve = catenary(new THREE.Vector3(a.x + px * o, a.y, a.z + pz * o), new THREE.Vector3(b.x + px * o, b.y, b.z + pz * o), Math.min(e.tier === 'HV' ? 4 : 1.6, L * 0.035));
       const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, r, 6, false), v.wireMat);
       tube.castShadow = true;
       g.add(tube);
       v.wires.push(tube);
     }
-    const width = e.kind === 'drop' ? 1.0 : e.tier === 'MV' ? 2.6 : 1.8;
+    const width = e.kind === 'drop' ? 1.0 : e.tier === 'HV' ? 3.6 : e.tier === 'MV' ? 2.6 : 1.8;
     v.mat = ribbonMaterial();
     v.mat.userData.own = true;
     v.mat.uniforms.uLen.value = Math.hypot(gb.x - ga.x, gb.z - ga.z);
-    v.mat.uniforms.uDouble.value = e.kind === 'line' && e.tier === 'MV' ? 1 : 0;
+    v.mat.uniforms.uDouble.value = e.kind === 'line' && (e.tier === 'MV' || e.tier === 'HV') ? 1 : 0;
     v.ribbon = new THREE.Mesh(ribbonGeometry(ga, gb, width, e.kind === 'drop' ? 0.4 : 0.38), v.mat);
     v.ribbon.renderOrder = 2;
     g.add(v.ribbon);
@@ -367,14 +456,14 @@ export function createNetworkView(scene, map) {
       u.uDir.value = e.flowDir || 1;
       u.uEnergy.value = v.energy;
       u.uPulse.value = reduceMotion ? 0 : 1;
-      const rating = e.kind === 'drop' ? 1e9 : e.tier === 'MV' ? opts.bal.network.mvRatingKW : opts.bal.network.lvRatingKW;
+      const rating = e.kind === 'drop' ? 1e9 : e.ratingKW || (e.tier === 'MV' ? opts.bal.network.mvRatingKW : opts.bal.network.lvRatingKW);
       const ratio = e.loadKW / rating;
       let c;
       let dash = !e.energized && v.energy < 0.05;
-      if (overlay === 'tier') c = e.tier === 'MV' && e.kind === 'line' ? COL.tierMV : COL.lv;
+      if (overlay === 'tier') c = e.kind !== 'line' ? COL.lv : e.tier === 'HV' ? COL.tierHV : e.tier === 'MV' ? COL.tierMV : COL.lv;
       else if (overlay === 'capacity') c = e.kind === 'drop' ? COL.lv : loadColor(ratio);
       else if (overlay === 'condition') c = COL.dead;
-      else c = e.kind === 'line' && e.tier === 'MV' ? COL.mv : COL.cyan;
+      else c = e.kind === 'line' && (e.tier === 'MV' || e.tier === 'HV') ? COL.mv : COL.cyan;
       if (!e.energized && overlay !== 'tier') c = tmp.copy(COL.dead);
       u.uDash.value = dash || (cb && overlay === 'capacity' && ratio >= 0.85) ? 1 : 0;
       u.uSpeed.value = e.kind === 'drop' ? 6 : 14;
@@ -396,11 +485,11 @@ export function createNetworkView(scene, map) {
         v.group.scale.set(1, s, 1);
       }
       let c;
-      const tier = n.kind === 'pole' ? n.tier : n.kind === 'gen' ? 'MV' : 'LV';
-      if (overlay === 'condition' && (n.kind === 'xfmr' || n.kind === 'gen')) c = condColor(n.kind === 'gen' ? state.gen.condition : n.condition);
-      else if (overlay === 'tier') c = tier === 'MV' ? COL.tierMV : COL.lv;
+      const tier = n.kind === 'pole' ? n.tier : n.kind === 'gen' ? n.tier || 'MV' : n.ratio === 'HV/MV' ? 'HV' : 'LV';
+      if (overlay === 'condition' && (n.kind === 'xfmr' || n.kind === 'gen')) c = condColor(n.kind === 'gen' ? state.gens[n.id]?.condition ?? 100 : n.condition);
+      else if (overlay === 'tier') c = tier === 'HV' ? COL.tierHV : tier === 'MV' ? COL.tierMV : COL.lv;
       else if (overlay === 'capacity' && n.kind === 'xfmr') c = loadColor(n.loadPct / 100);
-      else c = n.energized ? (tier === 'MV' ? COL.mv : COL.cyan) : COL.dead;
+      else c = n.energized ? (tier === 'MV' || tier === 'HV' ? COL.mv : COL.cyan) : COL.dead;
       const nkd = THREE.MathUtils.clamp(((opts.night ?? 1) - 0.3) / 0.7, 0, 1);
       v.dotMat.color.copy(c).multiplyScalar(n.energized ? 0.55 + 1.05 * nkd : 1);
       v.dotMat.opacity = n.energized || overlay !== 'flow' ? 1 : 0.0;
@@ -441,12 +530,12 @@ export function createNetworkView(scene, map) {
     const a = points[0];
     const b = points[points.length - 1];
     ghostRibbon.geometry.dispose();
-    ghostRibbon.geometry = ribbonGeometry(a, b, tier === 'MV' ? 3.0 : 2.2, 0.45);
+    ghostRibbon.geometry = ribbonGeometry(a, b, tier === 'HV' ? 4.0 : tier === 'MV' ? 3.0 : 2.2, 0.45);
     const u = ghostRibbon.material.uniforms;
     u.uColor.value.copy(ok ? COL.ghostOk : COL.ghostBad);
     u.uLen.value = Math.hypot(b.x - a.x, b.z - a.z);
     u.uTime.value = time;
-    u.uDouble.value = tier === 'MV' ? 1 : 0;
+    u.uDouble.value = tier === 'MV' || tier === 'HV' ? 1 : 0;
     ghostPoleMat.color.copy(ok ? COL.ghostOk : COL.ghostBad);
     const need = Math.max(0, points.length - 1);
     while (ghostPoles.length < need) {
@@ -461,5 +550,11 @@ export function createNetworkView(scene, map) {
     });
   }
 
-  return { root, sync, update, showGhost, views: () => views, attachPoint };
+  function dispose() {
+    for (const r of [root, ghostRoot]) {
+      scene.remove(r);
+      disposeTree(r);
+    }
+  }
+  return { root, sync, update, showGhost, views: () => views, attachPoint, dispose };
 }

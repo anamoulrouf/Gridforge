@@ -25,6 +25,8 @@ export function initEconomy(state, bal, mission) {
   for (const k of Object.keys(mission.contracts || {})) state.contracts[k] = { ...mission.contracts[k], accepted: false, offered: false, minTotal: 0, minOut: 0, penaltyPaid: 0 };
   state.programs = {};
   state.affordPct = 0;
+  const li = bal.tariffs?.lowincome ? typeDef(bal, 'lowincome') : null;
+  if (li) state.affordPct = ((li.dailyKWh * state.tariffs.lowincome) / bal.income.lowincome) * 100;
 }
 
 /** Per-minute accrual of revenue, costs, emissions and contract availability. */

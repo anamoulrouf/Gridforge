@@ -47,6 +47,22 @@ export const S = {
     useRepair: 'This unit is failing — send a repair crew instead.',
     noneInReach: 'No unconnected buildings within 22 m of this pole.',
     missionOver: 'The mission is over.',
+    tierGenHV: 'This plant connects at 66 kV (HV) — run a transmission line from it.',
+    tierGenLVOnly: 'This source connects at 400 V.',
+    tierSubLV: 'Substations step 66 kV down to 11 kV — connect 66 kV or 11 kV lines to them.',
+    tierXfmrHV: 'A pole transformer takes 11 kV, not 66 kV — use a substation for 66 kV.',
+    noSubstations: 'No substations in stock.',
+    subOnLower: 'Build the substation on a 66 kV (HV) tower.',
+    xfmrOnHV: 'That is a 66 kV tower — use the Substation tool (B) here.',
+    onSite: 'That plot is reserved for generation — use the Build tool.',
+    onWater: 'Poles can’t stand in the water.',
+    siteTaken: 'Something is already built here.',
+    notYet: 'Not available yet.',
+    notDispatchable: 'This source can’t be switched on and off — it follows the weather.',
+    retired: 'This plant has been retired.',
+    tariffBand: 'Outside the regulator’s allowed band.',
+    alreadyUpgraded: 'Already upgraded.',
+    notBuiltYet: 'Nobody lives here yet.',
     unknownCommand: 'Unknown action.',
   },
 
@@ -54,6 +70,8 @@ export const S = {
     unconnected: { label: 'Not connected', why: 'No service drop. Use Service drop (C) from a 400 V pole within 22 m.' },
     nopath: { label: 'No route to supply', why: 'Its 400 V line doesn’t reach the generator through a transformer and the 11 kV network.' },
     xfmrDown: { label: 'Transformer out', why: 'The transformer feeding it is out of service.' },
+    lineDown: { label: 'Line down', why: 'A line on its supply path is damaged or tripped. Repair or reset it.' },
+    planned: { label: 'Plot — not built yet', why: 'A family will move in here soon.' },
     noFuel: { label: 'Generator out of fuel', why: 'The generator has run dry. Order fuel at the generator.' },
     genOff: { label: 'Generator off', why: 'The network is connected but the generator isn’t running.' },
     shed: { label: 'Load shed', why: 'Not enough supply right now — your load-shed policy disconnected it.' },
@@ -62,12 +80,17 @@ export const S = {
   },
 
   xfmrState: { ok: 'In service', trip: 'Tripped (overload)', fault: 'FAULT', maint: 'Maintenance' },
-  genState: { off: 'Off', starting: 'Starting…', running: 'Running', nofuel: 'Out of fuel' },
+  genState: { off: 'Off', starting: 'Starting…', running: 'Running', nofuel: 'Out of fuel', tripped: 'Tripped' },
+  tierName: { HV: '66 kV', MV: '11 kV', LV: '400 V' },
+  srcName: { diesel: 'Diesel generator', gas: 'Gas genset', coal: 'Coal station', hydro: 'Hydro dam', solar: 'Solar farm', wind: 'Wind turbines', battery: 'Battery storage', import: 'Grid interconnector' },
+  clsName: { lowincome: 'low-income homes', home: 'households', business: 'businesses', public: 'public services', industry: 'industry' },
 
   tools: {
     select: { name: 'Select', key: 'V', hint: 'Click anything to inspect it. Drag the map to move around (or WASD), wheel to zoom, Q/E to rotate.' },
     line: { name: 'Line', key: 'L', hint: 'Click the generator, a pole or a transformer, then click where the line goes — poles are added every ≤40 m. Keep clicking to extend; right-click to stop.' },
-    xfmr: { name: 'Transformer', key: 'T', hint: 'Click an 11 kV (MV) pole to mount a transformer (600 ¢). Lines drawn from it carry 400 V.' },
+    xfmr: { name: 'Transformer', key: 'T', hint: 'Click an 11 kV (MV) pole to mount a transformer. Lines drawn from it carry 400 V.' },
+    sub: { name: 'Substation', key: 'B', hint: 'Click a 66 kV tower to build a substation (66 kV → 11 kV). 11 kV lines drawn from it feed districts and transformers.' },
+    build: { name: 'Build', key: 'G', hint: 'Click a marked site to build generation or storage (solar, wind, battery, gas…).' },
     drop: { name: 'Service drop', key: 'C', hint: 'Click a building to connect it to the nearest 400 V pole within 22 m (15 ¢) — or click a 400 V pole to connect every building in reach.' },
     remove: { name: 'Remove', key: 'X', hint: 'Click a pole, line, drop or transformer to remove it. Refunds 50% of credits and returns materials.' },
     overlay: { name: 'Overlay', key: 'O', hint: 'Cycle map overlays: Flow · Capacity · Voltage · Condition · Outages.' },
@@ -148,8 +171,8 @@ export const S = {
 };
 
 export const fmt = {
-  kw: (v) => `${v < 10 ? v.toFixed(1) : Math.round(v)} kW`,
-  kwh: (v) => `${v < 100 ? v.toFixed(1) : Math.round(v).toLocaleString('en-US')} kWh`,
+  kw: (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} MW` : `${Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v)} kW`),
+  kwh: (v) => (v >= 100000 ? `${(v / 1000).toFixed(1)} MWh` : `${v < 100 ? v.toFixed(1) : Math.round(v).toLocaleString('en-US')} kWh`),
   cr: (v) => `${Math.round(v).toLocaleString('en-US')} ¢`,
   pct: (v) => `${Math.round(v)}%`,
   clock: (c) => {

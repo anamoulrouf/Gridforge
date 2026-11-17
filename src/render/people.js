@@ -102,7 +102,7 @@ function makeVehicle(bodyColor, isTruck) {
 export function createPeople(scene, map) {
   const root = new THREE.Group();
   scene.add(root);
-  const gen = map.generator;
+  const gen = map.generator || (map.sources || [])[0] || { x: map.depot.x - 30, z: map.depot.z };
   const dep = map.depot;
 
   // idle workers (generator yard, depot)
@@ -226,19 +226,23 @@ export function createPeople(scene, map) {
       c.v.visible = powered >= 5 + i * 3;
       if (!c.v.visible) return;
       c.off = (c.off + dt * c.speed * (reduceMotion ? 0.5 : 1)) % 1;
-      if (c.route === 'main') {
-        const x = -150 + c.off * 300;
+      const mainR = map.roads.find((r) => r.id === 'main');
+      const crossR = map.roads.find((r) => r !== mainR && (r.lanes ?? r.id === 'cross') && r.d > r.w);
+      if (c.route === 'main' || !crossR) {
+        const half = Math.min(150, mainR.w * 0.45);
+        const x = mainR.x - half + c.off * half * 2;
         const fwd = i % 2 === 0;
-        c.v.position.set(fwd ? x : -x, 0, fwd ? 2 : -2);
+        c.v.position.set(fwd ? x : 2 * mainR.x - x, 0, mainR.z + (fwd ? 2 : -2));
         c.v.rotation.y = fwd ? 0 : Math.PI;
       } else {
-        const z = -90 + c.off * 180;
-        c.v.position.set(38, 0, z);
+        const half = crossR.d * 0.45;
+        const z = crossR.z - half + c.off * half * 2;
+        c.v.position.set(crossR.x - 2, 0, z);
         c.v.rotation.y = -Math.PI / 2;
       }
       c.v.userData.cone.material.opacity = 0.5 * nk;
     });
   }
 
-  return { root, update, truck };
+  return { root, update, truck, dispose: () => scene.remove(root) };
 }

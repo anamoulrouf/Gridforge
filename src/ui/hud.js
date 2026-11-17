@@ -3,9 +3,7 @@
 import { h, icon, esc } from './dom.js';
 import { S, fmt } from '../data/strings.js';
 import { CAST } from '../data/dialogue.js';
-import { OBJECTIVES, evalObjective } from '../sim/mission.js';
-import { BALANCE } from '../data/balance.js';
-import { objectiveGuide } from './guide.js';
+import { STAGES } from '../missions/index.js';
 
 export function createHud(ui, labelsEl, cb) {
   // ---------------------------------------------------------------- top bar
@@ -19,7 +17,16 @@ export function createHud(ui, labelsEl, cb) {
     powered: chip('powered', 'eye', 'Powered', { title: 'Customers receiving power out of 13.' }),
     rel: chip('rel', 'shield', 'Reliability', { title: 'Share of customer-hours with power since first light.' }),
     loss: chip('loss', 'wave', 'Losses', { title: 'Energy lost as heat in lines and transformers (simplified model).' }),
+    cash: chip('cash', 'coins', 'Yesterday', { button: true, onclick: () => cb.onPanel?.('finance'), title: 'Net result of the last daily statement. Click for the statement and tariffs.' }),
+    trust: chip('trust', 'chat', 'Trust', { button: true, onclick: () => cb.onPanel?.('trust'), title: 'Lowest customer-class trust (0–100). Click for the breakdown.', bar: true }),
+    afford: chip('afford', 'home', 'Afford.', { button: true, onclick: () => cb.onPanel?.('finance'), title: 'Low-income electricity bill as a share of household income (limit shown in the panel).' }),
+    renew: chip('renew', 'leaf', 'Renewable', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Share of electricity from clean sources right now (today’s average in the panel).', bar: true }),
+    co2: chip('co2', 'cloud', 'CO₂ today', { title: 'Emissions so far today from fossil generation.' }),
+    mix: chip('mix', 'bolt', 'Supply', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Generation by source. Click for dispatch order and the weather forecast.', bar: true }),
+    weather: chip('weather', 'sun', 'Weather', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Sun, cloud and wind now. Click for the 24 h forecast.' }),
   };
+  let M = STAGES[0];
+  let shownChips = '';
   const speedBtns = [
     ['pause', 0, 'Pause (Space)'],
     ['play', 1, 'Speed ×1 (1)'],
@@ -30,7 +37,7 @@ export function createHud(ui, labelsEl, cb) {
   const topbar = h(
     'header',
     { id: 'topbar', class: 'glass', hidden: true },
-    h('div', { class: 'brand', html: `${S.title}<small>${S.missionName}</small>` }),
+    h('div', { class: 'brand', id: 'brand', html: `${S.title}<small>${S.missionName}</small>` }),
     h('div', { class: 'chips' }, Object.values(chips)),
     h(
       'div',
@@ -44,14 +51,16 @@ export function createHud(ui, labelsEl, cb) {
 
   // ---------------------------------------------------------------- objectives
   const objList = h('div');
-  const objectives = h('aside', { id: 'objectives', class: 'glass', hidden: true, 'aria-label': 'Objectives' }, h('div', { class: 'panel-title', html: `<span>${S.stageName}</span>` }), h('div', { class: 'mission-name', text: S.missionName }), h('div', { class: 'obj-help', html: `${icon('info')}Hover an objective for step-by-step help` }), objList);
+  const objTitle = h('div', { class: 'panel-title', html: `<span>${S.stageName}</span>` });
+  const objName = h('div', { class: 'mission-name', text: S.missionName });
+  const objectives = h('aside', { id: 'objectives', class: 'glass', hidden: true, 'aria-label': 'Objectives' }, objTitle, objName, h('div', { class: 'obj-help', html: `${icon('info')}Hover an objective for step-by-step help` }), objList);
   // Hover / focus card with the full "how to complete" guide for one objective.
   const objCard = h('div', { id: 'objcard', class: 'glass', role: 'tooltip', hidden: true });
   const card = { id: null, pinned: false, row: null, hideT: null, html: '', state: null };
 
   // ---------------------------------------------------------------- toolbar + inventory + hint
-  const tools = ['select', 'line', 'xfmr', 'drop', 'remove'];
-  const toolIcons = { select: 'cursor', line: 'line', xfmr: 'xfmr', drop: 'plug', remove: 'trash', overlay: 'layers' };
+  const tools = ['select', 'line', 'xfmr', 'sub', 'drop', 'build', 'remove'];
+  const toolIcons = { select: 'cursor', line: 'line', xfmr: 'xfmr', sub: 'sub', drop: 'plug', build: 'plus', remove: 'trash', overlay: 'layers' };
   const toolBtns = {};
   for (const t of [...tools, 'overlay']) {
     toolBtns[t] = h('button', {
@@ -78,9 +87,11 @@ export function createHud(ui, labelsEl, cb) {
   function renderCard() {
     const st = card.state;
     if (!st || !card.id) return;
-    const gd = objectiveGuide(st, BALANCE, card.id, { xfmrName: cb.xfmrName });
-    const r = evalObjective(st, card.id);
-    const done = card.id === 'losses' ? r.done : st.objectives[card.id];
+    const o = M.objectives.find((x) => x.id === card.id);
+    if (!o) return;
+    const gd = o.guide(st, card.bal, { xfmrName: cb.xfmrName, srcName: cb.srcName });
+    const r = o.eval(st, card.bal);
+    const done = o.live ? r.done : st.objectives[card.id];
     const html =
       `<div class="oc-head"><span class="oc-state ${done ? 'done' : ''}">${done ? icon('check') + 'Done' : 'To do'}</span>${card.pinned ? '<span class="oc-pin">Pinned · Esc to close</span>' : ''}</div>` +
       `<h4>${esc(gd.title)}</h4><p class="oc-why">${gd.why}</p>` +
@@ -190,16 +201,57 @@ export function createHud(ui, labelsEl, cb) {
       b.style.background = cls === 'bad' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : 'var(--power)';
     }
   }
+  function setMission(m) {
+    M = m;
+    objTitle.innerHTML = `<span>${esc(m.stageName)}</span>`;
+    objName.textContent = m.name;
+    document.getElementById('brand').innerHTML = `${S.title}<small>${esc(m.name)}</small>`;
+    const want = m.chips.join(',');
+    if (want !== shownChips) {
+      shownChips = want;
+      const box = topbar.querySelector('.chips');
+      box.innerHTML = '';
+      for (const k of m.chips) if (chips[k]) box.append(chips[k]);
+    }
+    lastObjKey = '';
+    closeCard(true);
+  }
   function update(state, ux) {
     const f = state.flow;
-    const g = state.gen;
-    setChip(chips.credits, fmt.cr(state.credits), state.credits < 300 ? 'warn' : '');
+    const bal = ux.bal;
+    const g = state.gen || Object.values(state.gens).find((x) => x.fuel != null) || null;
+    setChip(chips.credits, fmt.cr(state.credits), state.credits < 300 ? 'warn' : state.credits < 0 ? 'bad' : '');
     setChip(chips.demand, fmt.kw(f.townDemandKW || 0));
-    const genCls = f.deficitKW > 0.01 && f.availKW > 0 ? 'warn' : g.status === 'running' ? 'good' : '';
-    setChip(chips.gen, `${fmt.kw(f.genKW || 0)} / ${Math.round(f.availKW || 0)}`, genCls, ((f.genKW || 0) / 100) * 100);
-    const hrs = f.genKW > 0 ? (g.fuel * 20) / f.genKW : null;
-    setChip(chips.fuel, `${Math.floor(g.fuel)} u${hrs != null ? ' · ' + Math.floor(hrs) + ' h' : ''}`, g.fuel <= 0 ? 'bad' : g.fuel < 30 ? 'warn' : '', (g.fuel / 150) * 100);
-    setChip(chips.powered, `${f.powered} / 13`, f.powered === 13 ? 'good' : '');
+    const anyOn = Object.values(state.gens).some((x) => x.status === 'running');
+    const genCls = f.deficitKW > 0.01 && f.availKW > 0 ? 'warn' : anyOn ? 'good' : '';
+    const unit = (f.availKW || 0) >= 1000 ? fmt.kw(f.availKW).replace(/ .*$/, '') : Math.round(f.availKW || 0);
+    setChip(chips.gen, `${fmt.kw(f.genKW || 0)} / ${unit}`, genCls, ((f.genKW || 0) / Math.max(1, f.availKW || 100)) * 100);
+    if (g && M.chips.includes('fuel')) {
+      const hrs = f.genKW > 0 ? (g.fuel * 20) / Math.max(1, g.outKW || f.genKW) : null;
+      setChip(chips.fuel, `${Math.floor(g.fuel)} u${hrs != null ? ' · ' + Math.floor(hrs) + ' h' : ''}`, g.fuel <= 0 ? 'bad' : g.fuel < 30 ? 'warn' : '', (g.fuel / 150) * 100);
+    }
+    const total = f.activeCount ?? state.map.customers.length;
+    setChip(chips.powered, `${f.powered} / ${total}`, f.powered === total ? 'good' : '');
+    if (state.days) {
+      const last = state.days[state.days.length - 1];
+      setChip(chips.cash, last ? `${last.net >= 0 ? '+' : '−'}${fmt.cr(Math.abs(last.net))}` : '—', last ? (last.net >= 0 ? 'good' : 'warn') : '');
+    }
+    if (state.trust) {
+      const vals = Object.values(state.trust);
+      const lo = Math.min(...vals);
+      setChip(chips.trust, `${Math.round(lo)}`, lo < (bal.fail.trustMin ?? 30) + 10 ? 'bad' : lo < 60 ? 'warn' : 'good', lo);
+    }
+    if (bal.afford) setChip(chips.afford, `${(state.affordPct || 0).toFixed(1)}%`, state.affordPct > bal.afford.limitPct ? 'bad' : state.affordPct > bal.afford.limitPct * 0.85 ? 'warn' : 'good');
+    const genNow = Object.values(state.gens).reduce((a, x) => a + (x.outKW || 0), 0);
+    const renNow = Object.values(state.gens).reduce((a, x) => a + ((bal.sourceTypes?.[x.type]?.renewable || bal.sourceTypes?.[x.type]?.variable) ? x.outKW || 0 : 0), 0) + (f.exportKW || 0);
+    const rp = genNow + (f.exportKW || 0) > 0 ? (renNow / (genNow + (f.exportKW || 0))) * 100 : 0;
+    setChip(chips.renew, `${Math.round(rp)}%`, rp >= 70 ? 'good' : rp < 30 ? 'warn' : '', rp);
+    if (state.ledger) setChip(chips.co2, `${(state.ledger.co2 / 1000).toFixed(2)} t`);
+    setChip(chips.mix, `${fmt.kw(genNow)}`, f.deficitKW > 0.01 ? 'warn' : '', (genNow / Math.max(1, f.availKW || 1)) * 100);
+    if (state.weather) {
+      const w = state.weather;
+      setChip(chips.weather, `${w.sun > 0.05 ? (w.cloud > 0.6 ? 'Cloudy' : 'Sunny') : 'Night'} · ${w.wind.toFixed(0)} m/s`, w.storm ? 'bad' : w.calm ? 'warn' : '');
+    }
     const s = state.stats;
     const rel = s.custMinTotal > 0 ? (s.custMinPowered / s.custMinTotal) * 100 : null;
     setChip(chips.rel, rel == null ? '—' : fmt.pct(rel), rel != null && rel < 80 ? 'warn' : '');
@@ -210,9 +262,9 @@ export function createHud(ui, labelsEl, cb) {
     document.getElementById('btn-sound').innerHTML = icon(ux.muted ? 'mute' : 'sound');
 
     // objectives
-    const rows = OBJECTIVES.map((o) => {
-      const r = evalObjective(state, o.id);
-      const done = o.id === 'losses' ? r.done : state.objectives[o.id];
+    const rows = M.objectives.map((o) => {
+      const r = o.eval(state, bal);
+      const done = o.live ? r.done : state.objectives[o.id];
       return { o, r, done };
     });
     const cur = rows.find((x) => x.o.primary && !x.done);
@@ -221,9 +273,9 @@ export function createHud(ui, labelsEl, cb) {
       lastObjKey = key;
       objList.innerHTML = '';
       rows.forEach((x, i) => {
-        if (i === OBJECTIVES.findIndex((o) => !o.primary)) objList.append(h('div', { class: 'sep' }));
+        if (i === M.objectives.findIndex((o) => !o.primary)) objList.append(h('div', { class: 'sep' }));
         const p = x.r.progress;
-        const showBar = p && !x.done && (x.o.id === 'connect' || x.o.id === 'stable');
+        const showBar = p && !x.done && (x.o.bar ?? (x.o.id === 'connect' || x.o.id === 'stable'));
         objList.append(
           h(
             'div',
@@ -233,11 +285,11 @@ export function createHud(ui, labelsEl, cb) {
               role: 'button',
               'data-obj': x.o.id,
               'aria-describedby': 'objcard',
-              'aria-label': `${S.objectives[x.o.id]}${x.done ? ' (done)' : ''}. Show how to complete it.`,
+              'aria-label': `${x.o.label}${x.done ? ' (done)' : ''}. Show how to complete it.`,
             },
             h('div', { class: 'box', html: x.done ? icon('check') : '' }),
-            h('div', { style: { flex: 1 } }, S.objectives[x.o.id], showBar ? h('div', { class: 'pbar', html: `<i style="width:${(p[0] / p[1]) * 100}%"></i>` }) : null),
-            p && !x.done ? h('span', { class: 'prog', text: x.o.id === 'stable' ? `${p[0]} / ${p[1]} h` : `${p[0]}/${p[1]}` }) : null,
+            h('div', { style: { flex: 1 } }, x.o.label, showBar ? h('div', { class: 'pbar', html: `<i style="width:${(p[0] / p[1]) * 100}%"></i>` }) : null),
+            p && !x.done ? h('span', { class: 'prog', text: x.o.unit ? `${p[0]} / ${p[1]} ${x.o.unit}` : x.o.id === 'stable' ? `${p[0]} / ${p[1]} h` : `${p[0]}/${p[1]}` }) : null,
             h('span', { class: 'more', html: icon('info') }),
           ),
         );
@@ -245,15 +297,17 @@ export function createHud(ui, labelsEl, cb) {
       if (card.id) card.row = objList.querySelector(`[data-obj="${card.id}"]`);
     }
     card.state = state;
+    card.bal = bal;
     if (card.id) renderCard();
 
     // inventory
     const inv = state.inv;
     const lo = (v, t) => (v <= t ? 'low' : '');
-    inventory.innerHTML = `<span class="${lo(inv.poles, 2)}">Poles <b>${inv.poles}</b></span><span class="${lo(inv.cable, 40)}">Cable <b>${inv.cable} m</b></span><span class="${lo(inv.transformers, 0)}">Transformers <b>${inv.transformers}</b></span><span class="${lo(inv.kits, 0)}">Repair kits <b>${inv.kits}</b></span>`;
+    inventory.innerHTML = `<span class="${lo(inv.poles, 2)}">Poles <b>${inv.poles}</b></span><span class="${lo(inv.cable, 40)}">Cable <b>${inv.cable} m</b></span><span class="${lo(inv.transformers, 0)}">Transformers <b>${inv.transformers}</b></span>${M.tools.includes('sub') ? `<span class="${lo(inv.substations, 0)}">Substations <b>${inv.substations}</b></span>` : ''}<span class="${lo(inv.kits, 0)}">Repair kits <b>${inv.kits}</b></span>`;
   }
 
   function setTool(t, overlayName) {
+    for (const k of tools) toolBtns[k].hidden = !M.tools.includes(k);
     for (const k in toolBtns) toolBtns[k].classList.toggle('on', k === t);
     document.getElementById('overlay-name').textContent = overlayName;
   }
@@ -365,5 +419,5 @@ export function createHud(ui, labelsEl, cb) {
     }
   }
 
-  return { show, update, setTool, closeObjCard: () => (card.id ? (closeCard(true), true) : false), alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
+  return { setMission, show, update, setTool, closeObjCard: () => (card.id ? (closeCard(true), true) : false), alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
 }
