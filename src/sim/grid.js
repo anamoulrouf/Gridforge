@@ -4,6 +4,19 @@
 
 export const SNAP_R = 5;
 
+/** Voltage tiers, highest first. HV = transmission (lattice towers), MV = 11 kV, LV = 400 V. */
+export const TIERS = ['HV', 'MV', 'LV'];
+/** Transformer ratios: upper tier / lower tier. A substation is an HV/MV transformer. */
+export const RATIO = { 'MV/LV': ['MV', 'LV'], 'HV/MV': ['HV', 'MV'] };
+export const ratioOf = (n) => RATIO[n.ratio || 'MV/LV'];
+const per = (v, tier) => (v && typeof v === 'object' ? v[tier] : v);
+
+/** Map source definition (generator / plant / farm) for a gen node. */
+export function sourceDef(state, id) {
+  const m = state.map;
+  return (m.sources || []).find((s) => s.id === id) || (state.built && state.built[id]) || (id === 'gen' && m.generator ? { id: 'gen', ...m.generator, tier: 'MV' } : null);
+}
+
 export function rectDist(px, pz, r) {
   const dx = Math.max(Math.abs(px - r.x) - r.w / 2, 0);
   const dz = Math.max(Math.abs(pz - r.z) - r.d / 2, 0);
@@ -16,22 +29,30 @@ export const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 export function nodePos(state, id) {
   const n = state.nodes[id];
   if (!n) return null;
-  return n.kind === 'gen' ? state.map.generator.port : n;
+  if (n.kind === 'gen') {
+    const s = sourceDef(state, id);
+    return s?.port || n;
+  }
+  return n;
 }
 
 /** What tier a new line starting at `node` carries. */
 export function startTier(node, override) {
-  if (node.kind === 'gen') return 'MV';
+  if (node.kind === 'gen') return node.tier || 'MV';
   if (node.kind === 'pole') return node.tier;
-  if (node.kind === 'xfmr') return override === 'MV' ? 'MV' : 'LV';
+  if (node.kind === 'xfmr') {
+    const [up, lo] = ratioOf(node);
+    return override === up || override === 'up' ? up : lo;
+  }
+  if (node.kind === 'switch') return node.tier;
   return null;
 }
 
 /** Can `node` accept an edge of `tier`? Returns null if ok, else reason key. */
 export function acceptTier(node, tier) {
-  if (node.kind === 'gen') return tier === 'MV' ? null : 'tierGenLV';
-  if (node.kind === 'pole') return node.tier === tier ? null : 'tierMismatch';
-  if (node.kind === 'xfmr') return null;
+  if (node.kind === 'gen') return tier === (node.tier || 'MV') ? null : node.tier === 'HV' ? 'tierGenHV' : node.tier === 'LV' ? 'tierGenLVOnly' : 'tierGenLV';
+  if (node.kind === 'pole' || node.kind === 'switch') return node.tier === tier ? null : 'tierMismatch';
+  if (node.kind === 'xfmr') return ratioOf(node).includes(tier) ? null : node.ratio === 'HV/MV' ? 'tierSubLV' : 'tierXfmrHV';
   return 'badTarget';
 }
 
@@ -42,7 +63,10 @@ export function siteBlocked(state, x, z, ignoreIds = []) {
   if (x < b.minX + 4 || x > b.maxX - 4 || z < b.minZ + 4 || z > b.maxZ - 4) return 'outOfBounds';
   for (const r of m.roads) if (rectDist(x, z, r) < 0.6) return 'onRoad';
   for (const c of m.customers) if (rectDist(x, z, c) < 1.5) return 'onBuilding';
-  if (rectDist(x, z, m.generator) < 1.5) return 'onBuilding';
+  if (m.generator && rectDist(x, z, m.generator) < 1.5) return 'onBuilding';
+  for (const s of m.sources || []) if (s.w && rectDist(x, z, s) < 1.5) return 'onBuilding';
+  for (const s of m.sites || []) if (rectDist(x, z, s) < 1.0) return 'onSite';
+  for (const w of m.water || []) if (rectDist(x, z, w) < 0.5) return 'onWater';
   if (rectDist(x, z, m.depot) < 1.5) return 'onBuilding';
   for (const id in state.nodes) {
     if (ignoreIds.includes(id)) continue;
@@ -60,7 +84,8 @@ export function nodeAt(state, x, z, r = SNAP_R) {
   for (const id in state.nodes) {
     const p = nodePos(state, id);
     const n = state.nodes[id];
-    const d = n.kind === 'gen' ? Math.min(dist(p, { x, z }), rectDist(x, z, state.map.generator)) : dist(p, { x, z });
+    const sd = n.kind === 'gen' ? sourceDef(state, id) : null;
+    const d = n.kind === 'gen' ? Math.min(dist(p, { x, z }), sd && sd.w ? rectDist(x, z, sd) : Infinity) : dist(p, { x, z });
     if (d <= bd) {
       bd = d;
       best = id;
@@ -122,7 +147,7 @@ export function planLine(state, bal, fromId, to, tierOverride) {
 
   const L = dist(a, end);
   if (L < 3) return { ...res, reason: 'tooShort', points: [a, end] };
-  const maxSpan = bal.network.maxSpan;
+  const maxSpan = per(bal.network.maxSpan, tier);
   let spans = Math.max(1, Math.ceil(L / maxSpan - 1e-9));
   let points = null;
   // Try equal spacing; if an interior pole lands on a road/building, add a span and retry.
@@ -149,15 +174,23 @@ export function planLine(state, bal, fromId, to, tierOverride) {
   res.points = points;
   res.newPoles = points.length - 2 + (res.endNew ? 1 : 0);
   res.meters = Math.ceil(L);
-  res.cost = res.newPoles * bal.costs.pole + res.meters * bal.costs.cablePerM;
+  res.cost = res.newPoles * per(bal.costs.pole, tier) + res.meters * per(bal.costs.cablePerM, tier);
 
   const inv = state.inv;
-  if (inv.poles < res.newPoles) return { ...res, reason: 'noPoles' };
-  if (inv.cable < res.meters) return { ...res, reason: 'noCable' };
+  if (tier === 'HV') {
+    // HV towers and conductor are procured per project (credits only), not from pole/cable stock
+    res.hv = true;
+  } else {
+    if (inv.poles < res.newPoles) return { ...res, reason: 'noPoles' };
+    if (inv.cable < res.meters) return { ...res, reason: 'noCable' };
+  }
   if (state.credits < res.cost) return { ...res, reason: 'noCredits' };
   res.ok = true;
   return res;
 }
+
+/** Can a service drop hang from this node? (400 V poles and MV/LV transformers) */
+export const isLVNode = (n) => (n.kind === 'pole' && n.tier === 'LV') || (n.kind === 'xfmr' && (n.ratio || 'MV/LV') === 'MV/LV');
 
 /** LV-capable nodes (LV poles and transformers) within reach of building footprint, nearest first. */
 export function lvNodesInReach(state, bal, buildingId) {
@@ -165,7 +198,7 @@ export function lvNodesInReach(state, bal, buildingId) {
   const out = [];
   for (const id in state.nodes) {
     const n = state.nodes[id];
-    if (!((n.kind === 'pole' && n.tier === 'LV') || n.kind === 'xfmr')) continue;
+    if (!isLVNode(n)) continue;
     const d = rectDist(n.x, n.z, c);
     if (d <= bal.network.dropReach) out.push({ id, d });
   }
@@ -184,11 +217,12 @@ export function dropOf(state, buildingId) {
 export function planDrop(state, bal, buildingId, fromId) {
   const c = state.map.customers.find((b) => b.id === buildingId);
   if (!c) return { ok: false, reason: 'badTarget' };
+  if (state.cust[buildingId] && state.cust[buildingId].active === false) return { ok: false, reason: 'notBuiltYet' };
   if (dropOf(state, buildingId)) return { ok: false, reason: 'alreadyDropped' };
   let src = null;
   if (fromId) {
     const n = state.nodes[fromId];
-    if (!n || !((n.kind === 'pole' && n.tier === 'LV') || n.kind === 'xfmr')) return { ok: false, reason: 'dropNeedsLV' };
+    if (!n || !isLVNode(n)) return { ok: false, reason: 'dropNeedsLV' };
     if (rectDist(n.x, n.z, c) > bal.network.dropReach) return { ok: false, reason: 'dropOutOfReach' };
     src = fromId;
   } else {
@@ -200,30 +234,41 @@ export function planDrop(state, bal, buildingId, fromId) {
   return { ok: true, from: src, cost: bal.costs.drop };
 }
 
-/** Plan converting a pole (or empty ground) into a transformer. */
-export function planTransformer(state, bal, at) {
-  if (state.inv.transformers < 1) return { ok: false, reason: 'noTransformers' };
-  if (state.credits < bal.costs.transformer) return { ok: false, reason: 'noCredits' };
+/** Plan converting a pole/tower (or empty ground) into a transformer (MV/LV) or substation (HV/MV). */
+export function planTransformer(state, bal, at, sub = false) {
+  const invKey = sub ? 'substations' : 'transformers';
+  const cost = sub ? bal.costs.substation : bal.costs.transformer;
+  const upper = sub ? 'HV' : 'MV';
+  if (!((state.inv[invKey] || 0) >= 1)) return { ok: false, reason: sub ? 'noSubstations' : 'noTransformers' };
+  if (state.credits < cost) return { ok: false, reason: 'noCredits' };
   if (typeof at === 'string') {
     const n = state.nodes[at];
     if (!n) return { ok: false, reason: 'badTarget' };
     if (n.kind === 'xfmr') return { ok: false, reason: 'alreadyXfmr' };
     if (n.kind === 'gen') return { ok: false, reason: 'xfmrOnGen' };
-    if (n.tier !== 'MV') return { ok: false, reason: 'xfmrOnLV' };
-    return { ok: true, node: at, cost: bal.costs.transformer };
+    if (n.tier !== upper) return { ok: false, reason: sub ? 'subOnLower' : n.tier === 'HV' ? 'xfmrOnHV' : 'xfmrOnLV' };
+    return { ok: true, node: at, cost, ratio: sub ? 'HV/MV' : 'MV/LV' };
   }
   const near = nodeAt(state, at.x, at.z);
-  if (near) return planTransformer(state, bal, near);
+  if (near) return planTransformer(state, bal, near, sub);
   const blk = siteBlocked(state, at.x, at.z);
   if (blk) return { ok: false, reason: blk };
-  return { ok: true, point: { x: Math.round(at.x * 2) / 2, z: Math.round(at.z * 2) / 2 }, cost: bal.costs.transformer };
+  return { ok: true, point: { x: Math.round(at.x * 2) / 2, z: Math.round(at.z * 2) / 2 }, cost, ratio: sub ? 'HV/MV' : 'MV/LV' };
 }
 
-/** Bus id for an edge endpoint: transformers have HV and LV buses. */
+/** Bus id for an edge endpoint: transformers have an upper (:hv) and a lower (:lv) bus. */
 export function busOf(state, nodeId, tier) {
   const n = state.nodes[nodeId];
-  if (n.kind === 'xfmr') return nodeId + (tier === 'MV' ? ':hv' : ':lv');
+  if (n.kind === 'xfmr') return nodeId + (tier === ratioOf(n)[0] ? ':hv' : ':lv');
   return nodeId;
+}
+
+/** Rating (kW) of a line of `tier`, or of a transformer node. */
+export function lineRating(bal, tier) {
+  return per(bal.network.ratingKW, tier) ?? (tier === 'MV' ? bal.network.mvRatingKW : bal.network.lvRatingKW);
+}
+export function xfmrRating(bal, n) {
+  return n.ratingKW || (n.ratio === 'HV/MV' ? bal.substation.ratingKW : bal.transformer.ratingKW);
 }
 
 export function xfmrAvailable(n) {
