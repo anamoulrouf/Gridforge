@@ -256,6 +256,7 @@ export function createSim({ seed = 1337, bal = BALANCE, map = MISSION1 } = {}) {
       if (g.fuel <= 0) return { ok: false, reason: 'noFuel' };
       g.status = 'starting';
       g.rampMin = 0;
+      g.startT = state.t;
       if (!state.started) {
         state.started = true;
         // §10 telegraph: forecast evening peak per transformer when operations begin
