@@ -1,0 +1,17 @@
+{
+  "name": "gridforge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Gridforge — Stage 1 'Light the First District' first playable",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
