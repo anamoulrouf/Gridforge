@@ -29,6 +29,31 @@ export function initEconomy(state, bal, mission) {
   if (li) state.affordPct = ((li.dailyKWh * state.tariffs.lowincome) / bal.income.lowincome) * 100;
 }
 
+/** Rolling contract window: hourly outage minutes for the last `windowH` hours. */
+export function closeContractHour(ct) {
+  const W = ct.windowH || 48;
+  ct.ring = ct.ring || [];
+  ct.ring.push(ct.curOut || 0);
+  if (ct.ring.length > W) ct.ring.shift();
+  ct.curMin = 0;
+  ct.curOut = 0;
+  if (ct.ring.length >= W) ct.best = Math.max(ct.best ?? 0, windowAvail(ct));
+}
+
+/** Availability (%) over the rolling window so far (complete hours plus the current one). */
+export function windowAvail(ct) {
+  const ring = ct?.ring || [];
+  const mins = ring.length * 60 + (ct?.curMin || 0);
+  if (!mins) return 100;
+  const out = ring.reduce((a, b) => a + b, 0) + (ct.curOut || 0);
+  return 100 - (out / mins) * 100;
+}
+
+/** Hours counted in the rolling window (capped at its length). */
+export function windowHours(ct) {
+  return Math.min(ct?.windowH || 48, (ct?.ring || []).length);
+}
+
 /** Per-minute accrual of revenue, costs, emissions and contract availability. */
 export function accrueMinute(state, bal) {
   const L = state.ledger;
@@ -50,12 +75,17 @@ export function accrueMinute(state, bal) {
     if (cs.dropped && cs.connected && cs.served < cs.demand - 1e-6) L.unservedKWh += (cs.demand - cs.served) / 60;
     if (c.contract) {
       const ct = state.contracts[c.contract];
-      if (ct && ct.accepted) {
+      // the contract clock starts once the plant has first had power (commissioning is free)
+      if (ct && ct.accepted && cs.everPowered) {
+        const out = cs.status !== 'on';
         ct.minTotal++;
-        if (cs.status !== 'on') {
+        ct.curMin = (ct.curMin || 0) + 1;
+        if (out) {
           ct.minOut++;
+          ct.curOut = (ct.curOut || 0) + 1;
           ct.penaltyToday = (ct.penaltyToday || 0) + ct.penaltyPerMin;
         }
+        if (ct.curMin >= 60) closeContractHour(ct);
       }
     }
   }

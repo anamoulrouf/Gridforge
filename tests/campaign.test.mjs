@@ -7,6 +7,7 @@ import { STAGES } from '../src/missions/index.js';
 import { runSteps } from '../src/sim/steps.js';
 import { planLine } from '../src/sim/grid.js';
 import { sunAt, weatherAt, solarFrac } from '../src/sim/weather.js';
+import { windowAvail, closeContractHour } from '../src/sim/economy.js';
 import S2 from '../src/missions/stage2.js';
 import S3, { REF3 } from '../src/missions/stage3.js';
 import S4, { REF4 } from '../src/missions/stage4.js';
@@ -108,6 +109,50 @@ test('Stage 3: an 11 kV route to industry congests and trips; careless supply mi
   assert.notEqual(s.state.result?.outcome, 'victory');
   assert.ok(s.state.contracts.mill.minOut > 0);
   assert.ok(s.state.contracts.mill.penaltyPaid > 0, 'penalties charged for outage minutes');
+});
+
+test('Stage 3: signing early costs nothing, and the 48 h contract window can be met by day 4', () => {
+  const sim = createSim({ mission: S3 });
+  sim.cmd({ type: 'contract', id: 'mill', accept: true });
+  for (let i = 0; i < 10 * 60; i++) sim.tick(); // ten hours of building with the mill dark
+  const ct = sim.state.contracts.mill;
+  assert.equal(ct.minOut, 0, 'no outage counted before the mill first has power');
+  assert.equal(ct.penaltyToday || 0, 0, 'no penalty before first power');
+  runSteps(sim.cmd, sim.state, REF3);
+  sim.cmd({ type: 'startGen', target: 'peaker' });
+  const obj = S3.objectives.find((o) => o.id === 'avail');
+  let doneAt = null;
+  for (let i = 0; i < 4 * D && doneAt == null && !sim.state.result; i++) {
+    sim.tick();
+    for (const e of sim.drainEvents()) {
+      if (e.type === 'recordsWarning') sim.cmd({ type: 'inspect', target: e.target });
+      if (e.type === 'inspected' && e.wear > 0) sim.cmd({ type: 'maintain', target: e.target });
+      if (e.type === 'fault' || e.type === 'lineTrip') sim.cmd({ type: 'repair', target: e.target });
+    }
+    if (obj.eval(sim.state).done) doneAt = sim.state.clock;
+  }
+  assert.ok(doneAt != null && doneAt <= 4 * D + sim.state.clock - sim.state.t, `contract window met by day 4 (best ${ct.best})`);
+});
+
+test('Stage 3: the reference keeps the mill above target over a full 48 h window', () => {
+  const sim = play(S3);
+  const ct = sim.state.contracts.mill;
+  assert.ok(ct.best >= ct.target, `best ${ct.best?.toFixed(2)}`);
+  assert.equal(ct.ring.length, ct.windowH);
+});
+
+test('Stage 3: a long outage drops out of the rolling window again', () => {
+  const ct = { windowH: 48 };
+  ct.curMin = 60;
+  ct.curOut = 60; // one hour fully dark
+  closeContractHour(ct);
+  for (let h = 0; h < 47; h++) Object.assign(ct, { curMin: 60, curOut: 0 }) && closeContractHour(ct);
+  assert.ok(Math.abs(windowAvail(ct) - (100 - 100 / 48)) < 1e-9, 'one dark hour in 48 h is about 97.9 %');
+  assert.ok(ct.best < 98);
+  Object.assign(ct, { curMin: 60, curOut: 0 });
+  closeContractHour(ct);
+  assert.equal(windowAvail(ct), 100, 'once the dark hour is 48 h old it no longer counts');
+  assert.equal(ct.best, 100);
 });
 
 test('Stage 4: solar is zero at night; the battery cannot create energy', () => {

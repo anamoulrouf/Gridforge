@@ -1,6 +1,7 @@
 // Object inspector (GDD §14): stats, state, capacity, condition, connections, costs, actions,
 // and a plain-language "why" for anything that isn't working (§2 legibility before complexity).
 // Also hosts the operations panels used from Stage 2 on: finance & tariffs, trust, supply mix.
+import { windowAvail, windowHours } from '../sim/economy.js';
 import { h, icon, esc } from './dom.js';
 import { S, fmt } from '../data/strings.js';
 import { demandAt, typeDef, srcType, ratedKW } from '../sim/power.js';
@@ -147,7 +148,7 @@ export function createInspector(ui, cb) {
           ['Bill today', fmt.cr(cs.kWhToday * tariff)],
           ['Fed by', cs.xfmr ? ctx.xfmrName(cs.xfmr) : cs.sub ? ctx.xfmrName(cs.sub) : '—'],
           ['Priority', T.critical ? '<span style="color:var(--amber)">Critical</span>' : (T.priority ?? 1) >= 2 ? 'Public / high' : 'Standard'],
-          ct ? ['Contract', ct.accepted ? `Signed · availability ${ct.minTotal ? (100 - (ct.minOut / ct.minTotal) * 100).toFixed(2) : '100.00'}%` : 'Not signed'] : null,
+          ct ? ['Contract', ct.accepted ? (state.cust[sel.id]?.everPowered ? `Signed · last ${windowHours(ct) || '<1'} h at ${windowAvail(ct).toFixed(1)}%` : 'Signed · clock starts at first power') : 'Not signed'] : null,
         ]) +
         (M.ui.buildingExtra ? M.ui.buildingExtra(c, state, ctx, { btn, kv }) : '') +
         (!cs.dropped

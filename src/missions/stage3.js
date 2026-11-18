@@ -7,6 +7,7 @@ import { BALANCE } from '../data/balance.js';
 import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { typeDef } from '../sim/power.js';
+import { windowAvail, windowHours } from '../sim/economy.js';
 import { runSteps } from '../sim/steps.js';
 
 const D = 1440;
@@ -93,12 +94,14 @@ export const BAL3 = {
   fail: { clinicOutageH: 6, bankruptGraceH: 6, deadlineDay: 6, debtLimit: -20000 },
 };
 
-const CONTRACTS = { mill: { tariff: 0.32, penaltyPerMin: 5, target: 99, name: 'Ironvale Steel supply contract' } };
+const CONTRACTS = { mill: { tariff: 0.32, penaltyPerMin: 5, target: 98, windowH: 48, name: 'Ironvale Steel supply contract' } };
 const INDUSTRY = ['mill', 'factory', 'warehouse'];
 const powered = (st, id) => st.cust[id].status === 'on' || st.cust[id].status === 'partial';
 const S0 = (st) => Object.keys(st.nodes).find((id) => st.nodes[id].kind === 'xfmr' && st.nodes[id].ratio === 'HV/MV' && st.nodes[id].legacy);
 const parkSub = (st) => Object.keys(st.nodes).find((id) => st.nodes[id].kind === 'xfmr' && st.nodes[id].ratio === 'HV/MV' && !st.nodes[id].legacy && st.nodes[id].x > 200);
-const avail = (ct) => (ct && ct.minTotal ? 100 - (ct.minOut / ct.minTotal) * 100 : 100);
+const avail = (ct) => windowAvail(ct);
+/** Best full 48 h window so far, or the running window before the first one completes. */
+const bestAvail = (ct) => (ct?.best != null ? ct.best : windowAvail(ct));
 
 function demandMod(state, c, kw, hour) {
   if (c.contract) {
@@ -127,7 +130,7 @@ const objectives = [
     guide: (st) => ({
       title: 'Sign the steel mill’s supply contract',
       why: 'Ironvale Steel will only run its furnaces with a firm supply: a lower tariff (0.32 ¢/kWh) for a huge, steady load — and a penalty for every minute it’s dark.',
-      steps: ['Click <b>Ironvale Steel</b> in the industrial park (east).', 'Read the terms: 99 % availability, 5 ¢ per minute of outage.', 'Press <b>Sign contract</b> — then deliver.'],
+      steps: ['Click <b>Ironvale Steel</b> in the industrial park (east).', 'Read the terms: keep the mill powered 98% of the time over 48 hours, or pay 5 ¢ for every minute it’s dark.', 'Press <b>Sign contract</b>. Penalties only start once the mill first gets power, so sign early.'],
       now: [st.contracts.mill.accepted ? ok('Signed') : todo('Not signed — the mill stays idle until you sign')],
       focus: { x: 315, z: -95, sel: { kind: 'building', id: 'mill' } },
       focusLabel: 'Show the steel mill',
@@ -194,19 +197,22 @@ const objectives = [
   {
     id: 'avail',
     primary: true,
-    label: 'Deliver 99% contract availability for 2 days',
+    label: 'Keep the mill at 98% power for 48 hours',
     eval: (st) => {
       const ct = st.contracts.mill;
-      const h = Math.floor((ct.minTotal || 0) / 60);
-      return { done: ct.accepted && ct.minTotal >= 2 * D && avail(ct) >= 99, progress: [Math.min(48, h), 48] };
+      return { done: ct.accepted && (ct.best ?? 0) >= ct.target, progress: [windowHours(ct), ct.windowH] };
     },
     guide: (st) => {
       const ct = st.contracts.mill;
       return {
-        title: 'Deliver 99% contract availability for 2 days',
-        why: 'An outage at a steel mill can freeze molten metal in the furnace. The contract pays well — and penalises every minute dark.',
-        steps: ['Keep the mill’s supply path short and inside its ratings.', 'Have a backup: the gas peaker for supply, spare repair kits for faults.', 'Avoid servicing the park substation during the contract window.'],
-        now: [ct.accepted ? (avail(ct) >= 99 ? ok(`Availability ${avail(ct).toFixed(2)}% over ${fmt.dur(ct.minTotal)}`) : warn(`Availability ${avail(ct).toFixed(2)}% — below 99%`)) : todo('Contract not signed'), ct.penaltyPaid || ct.penaltyToday ? warn(`Penalties: ${fmt.cr((ct.penaltyPaid || 0) + (ct.penaltyToday || 0))}`) : null].filter(Boolean),
+        title: 'Keep the mill at 98% power for 48 hours',
+        why: 'If a steel mill loses power, the metal in its furnace can set solid. The contract pays well, but you pay a penalty for every minute the mill is dark.',
+        steps: ['The clock starts when the mill first gets power, so building the line first costs you nothing.', 'Keep the mill on its own short supply from the park substation, inside its ratings.', 'Have a backup ready: the gas peaker for supply, and spare repair kits for faults.', 'Any 48 hours in a row count. If an outage drags the figure down, it recovers as that hour drops out of the window.'],
+        now: [
+          !ct.accepted ? todo('Contract not signed yet') : !st.cust.mill.everPowered ? todo('Waiting for the mill’s first power. The clock hasn’t started.') : avail(ct) >= ct.target ? ok(`Last ${windowHours(ct) || '<1'} h: ${avail(ct).toFixed(1)}% (you need ${ct.target}%)`) : warn(`Last ${windowHours(ct) || '<1'} h: ${avail(ct).toFixed(1)}%, below ${ct.target}%. It recovers as clean hours replace the outage.`),
+          ct.best != null ? info(`Best full 48 h so far: ${ct.best.toFixed(1)}%`) : ct.accepted && st.cust.mill.everPowered ? info(`${ct.windowH - windowHours(ct)} h until the first full 48 h window`) : null,
+          ct.penaltyPaid || ct.penaltyToday ? warn(`Penalties so far: ${fmt.cr((ct.penaltyPaid || 0) + (ct.penaltyToday || 0))}`) : null,
+        ].filter(Boolean),
         focus: { x: 315, z: -95, sel: { kind: 'building', id: 'mill' } },
         focusLabel: 'Show the steel mill',
       };
@@ -319,7 +325,7 @@ function score(state) {
   const ct = state.contracts.mill;
   const coverage = s.custMinTotal > 0 ? s.custMinPowered / s.custMinTotal : 0;
   const trips = s.trips + (s.lineTrips || 0);
-  const contract = ct.accepted ? Math.max(0, Math.min(25, 25 - (99.9 - avail(ct)) * 10)) : 0;
+  const contract = ct.accepted ? Math.max(0, Math.min(25, (25 * (bestAvail(ct) - 95)) / 4.5)) : 0;
   const reliability = Math.max(0, 15 - trips * 5);
   const lossPct = s.kWhGen > 0 ? (s.kWhLoss / s.kWhGen) * 100 : 0;
   const efficiency = lossPct <= 2 ? 15 : lossPct >= 7 ? 0 : 15 - ((lossPct - 2) / 5) * 15;
@@ -342,7 +348,7 @@ function metrics(state) {
       ['Customers powered', `${state.flow.powered} / ${state.map.customers.length}`],
       ['Energy delivered', fmt.kwh(s.kWhDelivered)],
       ['Peak demand', fmt.kw(s.peakKW)],
-      ['Contract availability', ct.accepted ? `${avail(ct).toFixed(2)}%` : '—'],
+      ['Contract availability (best 48 h)', ct.accepted ? `${bestAvail(ct).toFixed(1)}%` : 'Not signed'],
       ['Contract penalties', fmt.cr(ct.penaltyPaid + (ct.penaltyToday || 0))],
       ['Network losses', `${lossPct.toFixed(1)}%`],
       ['Operating result', fmt.cr((state.days || []).reduce((a, x) => a + x.net, 0))],
@@ -397,7 +403,7 @@ const ui = {
   demandNote: 'Apartments peak in the evening; offices and shops by day; the hospital never stops. The steel mill runs around the clock once its contract is signed; the factory runs two shifts.',
   briefing: {
     text: 'The Ironvale corridor: a coal station in the west, a town in the middle and an industrial park in the east that needs <b>over 3 MW</b>. 11 kV lines can’t carry that — it’s time for <b>66 kV transmission</b>.',
-    goals: ['Sign the steel mill’s supply contract', 'Build a 66 kV line and a substation at the park', 'Power the mill, factory and warehouse', '24 h without an overload trip, and 99 % contract availability for 2 days'],
+    goals: ['Sign the steel mill’s supply contract', 'Build a 66 kV line and a substation at the park', 'Power the mill, factory and warehouse', '24 h without an overload trip, and the mill powered 98% of the time over 48 hours'],
     newSystems: ['<b>High-voltage transmission</b> (66 kV lattice towers) and <b>substations</b>', '<b>Large industrial loads</b> connected at 11 kV', '<b>Congestion</b>: lines trip when overloaded', '<b>Contracts</b> with penalties · coal vs gas <b>dispatch</b> · <b>inspections</b>'],
   },
   failCause: {
@@ -449,7 +455,7 @@ const ui = {
   buildingExtra(c, state, ctx, { btn }) {
     if (c.contract !== 'mill') return '';
     const ct = state.contracts.mill;
-    return `<div class="why ${ct.accepted ? 'ok' : ''}"><b>${ct.name}</b>Tariff ${ct.tariff.toFixed(2)} ¢/kWh · availability target ${ct.target}% · penalty ${ct.penaltyPerMin} ¢ per minute dark.${ct.accepted ? ` Availability ${avail(ct).toFixed(2)}% · penalties ${fmt.cr(ct.penaltyPaid + (ct.penaltyToday || 0))}.` : ' The mill stays idle until you sign.'}</div>` + (ct.accepted ? '' : `<div class="actions">${btn('Sign contract', { type: 'contract', id: 'mill', accept: true }, { primary: true, icon: 'check' })}</div>`);
+    return `<div class="why ${ct.accepted ? 'ok' : ''}"><b>${ct.name}</b>Tariff ${ct.tariff.toFixed(2)} ¢/kWh · target ${ct.target}% over ${ct.windowH} h · penalty ${ct.penaltyPerMin} ¢ per minute dark.${ct.accepted ? (state.cust.mill.everPowered ? ` Last ${windowHours(ct) || '<1'} h: ${avail(ct).toFixed(1)}% · penalties ${fmt.cr(ct.penaltyPaid + (ct.penaltyToday || 0))}.` : ' The clock starts when the mill first gets power.') : ' The mill stays idle until you sign.'}</div>` + (ct.accepted ? '' : `<div class="actions">${btn('Sign contract', { type: 'contract', id: 'mill', accept: true }, { primary: true, icon: 'check' })}</div>`);
   },
 };
 

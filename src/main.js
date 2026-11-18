@@ -1404,7 +1404,10 @@ function resetVisuals() {
   for (const id of [...map.customers.map((c) => c.id), 'street-n', 'street-s']) if (world.groups[id]) world.groups[id].level = 0;
 }
 
-function startGame(m, save) {
+/** A fresh run seed: events and weather differ each playthrough (tests pin it with ?seed=). */
+const newSeed = () => (TEST ? Number(params.get('seed')) || 1337 : crypto.getRandomValues(new Uint32Array(1))[0] || 1);
+
+function startGame(m, save, opts = {}) {
   clearScreens();
   fade(true);
   setTimeout(() => {
@@ -1421,7 +1424,7 @@ function startGame(m, save) {
         store.del(SAVE_KEY);
       }
     }
-    app.sim = sim || createSim({ seed: 1337, mission: M });
+    app.sim = sim || createSim({ seed: opts.seed ?? newSeed(), mission: M });
     app.mode = 'game';
     app.paused = false;
     app.speed = 1;
@@ -1475,7 +1478,7 @@ function openPause() {
     onRestart: () => {
       app.hold = 0;
       store.del(SAVE_KEY);
-      startGame(M, null);
+      startGame(M, null, { seed: app.sim.state.seed }); // same run, same events
     },
     onMenu: () => {
       app.hold = 0;
@@ -1510,7 +1513,7 @@ function showResult() {
       });
     } else {
       audio.play('fail');
-      menus.fail(r, { mission: M, onRetry: () => startGame(M, null), onMenu: () => startMenu() });
+      menus.fail(r, { mission: M, onRetry: () => startGame(M, null, { seed: app.sim.state.seed }), onMenu: () => startMenu() });
     }
   }, 1400);
 }
