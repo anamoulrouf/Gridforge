@@ -374,3 +374,27 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .tariff-row b { font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
 .tariff-row .btn.small { padding: 0.2em 0.6em; }
 .build-opt { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 236, 205, 0.05); }
+
+/* Gazette button badge, community choice cards */
+#btn-news { position: relative; }
+#btn-news .badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--amber); color: #1b1408; font: 700 10px/16px var(--font); font-style: normal; }
+.modal.choice { max-width: 560px; }
+.modal .kicker.warn { color: var(--amber); }
+.choice-who { display: flex; gap: 10px; align-items: center; margin: 4px 0 8px; }
+.choice-who .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 0.8em; color: #17140f; }
+.choice-who span { display: block; color: var(--muted); font-size: 0.85em; }
+.choice-text { color: var(--text); line-height: 1.5; margin: 6px 0 14px; }
+.choice-opts { display: grid; gap: 8px; }
+.btn.choice-opt { display: block; text-align: left; padding: 10px 14px; height: auto; white-space: normal; }
+.btn.choice-opt b { display: block; }
+.btn.choice-opt span { display: block; font-weight: 400; font-size: 0.86em; opacity: 0.8; margin-top: 2px; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.news-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.news-item .when { font-size: 0.78em; color: var(--muted); }
+.news-item.good b { color: var(--green); }
+.news-item.bad b { color: var(--red); }
+/* many chips (later stages + reputation): tighten so every label fits at 1440 px */
+.chips:has(> .chip:nth-child(9)) { gap: 4px; }
+.chips:has(> .chip:nth-child(9)) .chip { padding: 5px 7px; gap: 6px; }
+.chips:has(> .chip:nth-child(9)) .chip .k { letter-spacing: 0.04em; }
+.chips:has(> .chip:nth-child(9)) .chip .ic { width: 14px; height: 14px; }

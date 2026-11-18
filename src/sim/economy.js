@@ -61,7 +61,9 @@ export function accrueMinute(state, bal) {
     const cs = state.cust[c.id];
     if (cs.active === false) continue;
     const kwh = cs.served / 60;
-    const rev = kwh * tariffOf(state, bal, c);
+    // happy customers pay on time; an angry town pays late or not at all (reputation 0..100 → −5 % .. +5 %)
+    const repK = state.ev ? 1 + Math.max(-0.05, Math.min(0.05, (state.ev.rep - 60) / 400)) : 1;
+    const rev = kwh * tariffOf(state, bal, c) * repK;
     cs.revToday = (cs.revToday || 0) + rev;
     L.revenue += rev;
     L.kWh += kwh;

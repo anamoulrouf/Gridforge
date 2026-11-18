@@ -7,6 +7,8 @@ import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { runSteps } from '../sim/steps.js';
 import { typeDef } from '../sim/power.js';
+import { drainAndRespond } from '../sim/events.js';
+import { rollingRel } from '../sim/sim.js';
 
 const D = 1440;
 const day = (d, h) => (d - 1) * D + h * 60;
@@ -69,6 +71,8 @@ export const MAP5 = {
     street('s1', 'Garden Streets', -300, 60), street('s2', 'Orchard Streets', -300, 120), street('s3', 'Park Streets', -140, 135),
     // south-east mobility
     hub('ev1', 'Central EV hub', 70, 70), hub('ev2', 'Port EV hub', 150, 70), hub('ev3', 'Ring EV hub', 150, 130),
+    // surprise: a tech campus opens (some runs)
+    { ...tower('c1', 'Nova Campus (new)', 290, 150, 'NOVA'), surprise: 'campus' },
   ],
 };
 
@@ -112,7 +116,7 @@ export const BAL5 = {
 const W5 = {
   1: { wind: 5, cloud: 0.6, label: 'Light winds, cloudy' },
   2: { wind: 5.5, cloud: 0.5, label: 'Light winds' },
-  3: { heat: true, label: 'Heat dome — cooling demand up 20 %' },
+  3: { heat: true, label: 'Heat dome: air conditioning pushes demand up 20%' },
   5: { wind: 13, cloud: 0.15, label: 'Bright and breezy' },
   6: { wind: 11, cloud: 0.2, label: 'Fair and windy' },
 };
@@ -164,9 +168,9 @@ const objectives = [
     eval: (st) => ({ done: !!prog(st, 'smart').on }),
     guide: (st) => ({
       title: 'Switch EV hubs to smart charging',
-      why: 'Unmanaged, everyone plugs in after work — the EV hubs add 2 MW right on the evening peak. Smart charging moves the same energy to windy nights and sunny middays.',
+      why: 'Left alone, everyone plugs in after work, and the EV hubs add 2 MW right on the evening peak. Smart charging moves the same energy to windy nights and sunny middays.',
       steps: ['Open the <b>Programs</b> panel (click an EV hub, or the Supply chip → Programs).', 'Enable <b>Smart charging</b> (one-off integration cost).', 'Watch the evening peak drop in the demand curve.'],
-      now: [prog(st, 'smart').on ? ok('Smart charging on') : todo('Off — EVs charge on the evening peak')],
+      now: [prog(st, 'smart').on ? ok('Smart charging on') : todo('Off. EVs charge during the evening peak')],
       focus: panel,
       focusLabel: 'Open Programs',
     }),
@@ -178,8 +182,8 @@ const objectives = [
     eval: (st) => ({ done: !!prog(st, 'dr').on }),
     guide: (st) => ({
       title: 'Enrol the data centre and towers in demand response',
-      why: 'Big commercial customers can trim 20 % at the 17–21 h peak and catch up later — for a daily payment. It’s cheaper than building supply for a few peak hours.',
-      steps: ['Open <b>Programs</b>.', 'Enable <b>Demand response</b> (daily payment to participants).', 'The shifted energy reappears late evening — it isn’t deleted.'],
+      why: 'Big commercial customers can cut 20% at the 17:00 to 21:00 peak and catch up later, for a daily payment. It’s cheaper than building supply for a few peak hours.',
+      steps: ['Open <b>Programs</b>.', 'Enable <b>Demand response</b> (daily payment to participants).', 'The energy they save is used later in the evening. It isn’t lost.'],
       now: [prog(st, 'dr').on ? ok('Enrolled') : todo('Not enrolled')],
       focus: panel,
       focusLabel: 'Open Programs',
@@ -209,7 +213,7 @@ const objectives = [
     guide: (st) => ({
       title: '24 h of 100% clean electricity, nobody dark',
       why: 'The goal of the whole campaign: every kWh consumed comes from clean sources, for a full day, with no unserved demand. Imports from the national grid count as fossil.',
-      steps: ['Add clean supply: the east wind site and the south solar park (G).', 'Add storage (second battery) and flexibility (smart charging, V2G, demand response, efficiency).', 'Keep the interconnector at the bottom of the dispatch order — any import resets the clock.'],
+      steps: ['Add clean supply: the east wind site and the south solar park (G).', 'Add storage (second battery) and flexibility (smart charging, V2G, demand response, efficiency).', 'Keep the national link at the bottom of the dispatch order. Any import restarts the clock.'],
       now: [info(`Current clean run: ${fmt.dur(st.flags.cleanRun || 0)} · best ${fmt.dur(st.flags.cleanBest || 0)}`), (st.gens.link?.outKW || 0) > 1 ? warn(`Importing ${fmt.kw(st.gens.link.outKW)} of fossil power now`) : ok('No imports right now'), (st.flow.deficitKW || 0) > 1 ? warn(`Short by ${fmt.kw(st.flow.deficitKW)}`) : null].filter(Boolean),
       focus: { x: 0, z: 0, sel: { kind: 'mix' } },
       focusLabel: 'Open Supply',
@@ -219,20 +223,15 @@ const objectives = [
     id: 'rel',
     primary: true,
     live: true,
-    label: 'Keep reliability at 99.5% or better',
-    eval: (st) => {
-      const s = st.stats;
-      const r = s.custMinTotal ? (s.custMinPowered / s.custMinTotal) * 100 : 100;
-      return { done: r >= 99.5 };
-    },
+    label: 'Keep reliability at 99.5% or better (last 48 h)',
+    eval: (st) => ({ done: rollingRel(st).pct >= 99.5 }),
     guide: (st) => {
-      const s = st.stats;
-      const r = s.custMinTotal ? (s.custMinPowered / s.custMinTotal) * 100 : 100;
+      const r = rollingRel(st).pct;
       return {
-        title: 'Keep reliability at 99.5% or better',
-        why: 'A 100 % clean grid only counts if it’s also reliable. Customer-hours powered ÷ customer-hours connected, since the start.',
+        title: 'Keep reliability at 99.5% or better (last 48 h)',
+        why: 'A 100% clean grid only counts if it’s also reliable. This is the share of time your customers had power over the last 48 hours, so a bad hour fades out of the figure again.',
         steps: ['Avoid shortages: storage and flexibility before the evening peak.', 'Let feeder automation re-route around faults.', 'Protect the hospital and the data centre.'],
-        now: [r >= 99.5 ? ok(`Reliability ${r.toFixed(2)}%`) : warn(`Reliability ${r.toFixed(2)}% — below 99.5%`)],
+        now: [r >= 99.5 ? ok(`Reliability ${r.toFixed(2)}%`) : warn(`Reliability ${r.toFixed(2)}%, below 99.5%`)],
         focus: null,
       };
     },
@@ -258,7 +257,7 @@ const objectives = [
     eval: (st) => ({ done: !!prog(st, 'v2g').on }),
     guide: (st) => ({
       title: 'Optional · Turn on vehicle-to-grid',
-      why: 'Parked EVs are batteries on wheels. With V2G the hubs export at the evening peak and recharge overnight — paid for their help.',
+      why: 'Parked EVs are batteries on wheels. With V2G the hubs export at the evening peak and recharge overnight, and owners get paid for helping.',
       steps: ['Requires smart charging.', 'Open Programs and enable V2G.'],
       now: [prog(st, 'v2g').on ? ok('On') : todo('Off')],
       focus: panel,
@@ -272,7 +271,7 @@ const objectives = [
     eval: (st) => ({ done: EFF.every((id) => st.programs?.eff?.[id]) }),
     guide: (st) => ({
       title: 'Optional · Efficiency retrofits for every home block',
-      why: 'Insulation, heat pumps and LEDs cut demand 15 % at every hour — the cleanest kWh is the one you don’t need.',
+      why: 'Insulation, heat pumps and LEDs cut demand 15% every hour. The cleanest kWh is the one you don’t need.',
       steps: ['Open Programs → Efficiency, or click a home block.', 'Retrofit each block (one-off cost).'],
       now: [info(`Retrofitted: ${EFF.filter((id) => st.programs?.eff?.[id]).length} / ${EFF.length}`)],
       focus: panel,
@@ -332,7 +331,7 @@ const PREBUILT = [
   { type: 'line', from: '@node:-110,50', to: { x: -80, z: 100 } },
   { type: 'line', from: '@node:-260,90', to: { x: -275, z: 60 } },
   { type: 'line', from: '@node:-260,90', to: { x: -275, z: 120 } },
-  ...MAP5.customers.map((c) => ({ type: 'drop', building: c.id })),
+  ...MAP5.customers.filter((c) => !c.surprise).map((c) => ({ type: 'drop', building: c.id })),
   // tie lines (normally open): west residential ↔ west civic; business ↔ mobility feeder
   { type: 'line', from: '@node:-260,-90', tier: 'up', to: { x: -244, z: -30 }, tie: true },
   { type: 'line', from: '@last', to: { x: -244, z: 40 }, tie: true },
@@ -415,10 +414,10 @@ function metrics(state) {
   const co2 = (state.days || []).reduce((a, x) => a + x.co2, 0) / 1000;
   return {
     powered: state.flow.powered,
-    total: state.map.customers.length,
+    total: state.flow.activeCount ?? state.map.customers.length,
     decisions: { smart: !!prog(state, 'smart').on, v2g: !!prog(state, 'v2g').on, dr: !!prog(state, 'dr').on, healed: !!state.flags.healed },
     cells: [
-      ['Customers powered', `${state.flow.powered} / ${state.map.customers.length}`],
+      ['Customers powered', `${state.flow.powered} / ${state.flow.activeCount ?? state.map.customers.length}`],
       ['Longest clean run', fmt.dur(state.flags.cleanBest || 0)],
       ['Reliability', `${r.toFixed(2)}%`],
       ['CO₂ from imports', `${co2.toFixed(1)} t`],
@@ -426,43 +425,43 @@ function metrics(state) {
       ['Energy delivered', fmt.kwh(s.kWhDelivered)],
       ['Operating result', fmt.cr((state.days || []).reduce((a, x) => a + x.net, 0))],
       ['Low-income bill share', `${state.affordPct.toFixed(1)}%`],
-      ['Self-healing', state.flags.healed ? 'Re-routed automatically' : state.flags.feederFault ? 'Manual' : '—'],
+      ['Self-healing', state.flags.healed ? 'Re-routed automatically' : state.flags.feederFault ? 'Manual' : 'Not needed'],
     ],
   };
 }
 
 // ------------------------------------------------------------------ narrative
 const LEARN5 = {
-  flex: { title: 'Flexibility is a resource', what: 'You switched on a flexibility program.', why: 'Clean supply follows the weather. Instead of building for the worst hour, you can move demand to when clean power is plentiful — and store it when it isn’t.', todo: ['Smart charging moves EV energy away from the evening peak.', 'V2G lets parked cars help at the peak.', 'Demand response trims commercial peaks — the energy is shifted, not deleted.'], real: 'Grid operators increasingly buy flexibility from customers instead of building peaking plants.' },
-  selfheal: { title: 'A self-healing grid', what: 'A feeder faulted and the automation re-routed supply.', why: 'Normally-open tie switches link neighbouring feeders. Sensors locate the fault, isolate it and close the right tie in about a minute.', todo: ['Repair the faulted section — the ties re-open afterwards.'], real: 'Fault location, isolation and service restoration (FLISR) cuts outage minutes dramatically on modern distribution grids.' },
-  fault: { title: 'Feeder fault — manual switching', what: 'A feeder section faulted. Customers beyond it are dark.', why: 'Without automation, the network can’t re-route on its own.', todo: ['Click a dashed tie switch and Close it to re-route supply.', 'Send the crew to repair the fault.', 'Buy feeder automation to make this automatic.'], real: 'Before automation, crews drove out to open and close switches by hand — taking hours.' },
-  clean: { title: '100% clean', what: 'A full day without a single fossil kWh — and nobody dark.', why: 'Clean supply, storage and flexibility, working together.', todo: ['Keep the run going — or enjoy the view.'], real: 'Cities and regions are now reaching hours, then days, of 100 % clean electricity.' },
+  flex: { title: 'Flexibility is a resource', what: 'You switched on a flexibility program.', why: 'Clean supply follows the weather. Instead of building for the worst hour, you can move demand to when clean power is plentiful, and store it for when it isn’t.', todo: ['Smart charging moves EV energy away from the evening peak.', 'V2G lets parked cars help at the peak.', 'Demand response trims business peaks. The energy is moved, not lost.'], real: 'Grid operators increasingly buy flexibility from customers instead of building peaking plants.' },
+  selfheal: { title: 'A self-healing grid', what: 'A feeder faulted and the automation re-routed supply.', why: 'Normally-open tie switches link neighbouring feeders. Sensors locate the fault, isolate it and close the right tie in about a minute.', todo: ['Repair the broken section. The switches open again afterwards.'], real: 'Fault location, isolation and service restoration (FLISR) cuts outage minutes dramatically on modern distribution grids.' },
+  fault: { title: 'Feeder fault: switch by hand', what: 'A feeder section faulted. Customers beyond it are dark.', why: 'Without automation, the network can’t re-route on its own.', todo: ['Click a dashed tie switch and Close it to re-route supply.', 'Send the crew to repair the fault.', 'Buy feeder automation to make this automatic.'], real: 'Before automation, crews drove out to open and close switches by hand, which took hours.' },
+  clean: { title: '100% clean', what: 'A full day without a single fossil kWh, and nobody in the dark.', why: 'Clean supply, storage and flexibility, working together.', todo: ['Keep it going, or just enjoy the view.'], real: 'Cities and regions are now reaching hours, then days, of 100 % clean electricity.' },
 };
 
 const LINES5 = {
   ...L1,
-  intro: [['advisor', 'Welcome to Aurora. The city already runs on wind, sun and a big battery — most of the time.'], ['sofia', 'When the wind drops, we import fossil power from the national grid. The goal: a full day without it.']],
+  intro: [['advisor', 'Welcome to Aurora. The city already runs on wind, sun and a big battery, most of the time.'], ['sofia', 'When the wind drops, we import fossil power from the national grid. The goal: a full day without it.']],
   heatForecast: [['advisor', 'Heat dome tomorrow: cooling demand up about 20 % from noon.']],
-  dcOffer: [['daniel', 'The data centre wants to add 40 % more servers from 14:00. More revenue — and more load.']],
+  dcOffer: [['daniel', 'The data centre wants to add 40 % more servers from 14:00. More income, and more load.']],
   feederWarn: [['sofia', 'The city feeders are running hot under the heat dome. I expect a cable joint to fail around the evening peak.']],
   feederFault: [['sofia', 'Cable fault on a city feeder! Customers are dark.']],
   selfHealed: [['sofia', 'The automation re-routed around the fault in under a minute. Crew, go fix the cable.']],
-  cleanDay: [['maya', 'Twenty-four hours of 100 % clean power — the whole city.']],
+  cleanDay: [['maya', 'Twenty-four hours of 100% clean power, for the whole city.']],
   tutorialDone: [['advisor', 'Aurora is yours. Make it the first 100 % clean city.']],
 };
 
 const TUT5 = [
-  { id: 'mix', title: 'Where does Aurora’s power come from?', body: 'Click the Supply chip: wind, solar, the city battery — and the national interconnector, which is fossil.', target: { ui: '#chip-mix' }, done: (st) => !!st.inspected.mix },
-  { id: 'programs', title: 'Flexibility programs', body: 'Click an EV hub (south-east) and open Programs. Turn on smart charging — EVs stop piling onto the evening peak.', target: { world: 'cust', id: 'ev1' }, done: (st) => !!prog(st, 'smart').on },
+  { id: 'mix', title: 'Where does Aurora’s power come from?', body: 'Click the Supply chip: wind, solar, the city battery, and the national link, which brings fossil power.', target: { ui: '#chip-mix' }, done: (st) => !!st.inspected.mix },
+  { id: 'programs', title: 'Flexibility programs', body: 'Click an EV hub (south-east) and open Programs. Turn on smart charging so EVs stop piling onto the evening peak.', target: { world: 'cust', id: 'ev1' }, done: (st) => !!prog(st, 'smart').on },
   { id: 'auto', title: 'A self-healing network', body: 'In Programs, buy feeder automation. Dashed tie switches will re-route power around faults.', target: { world: 'cust', id: 'ev1' }, done: (st) => !!prog(st, 'auto').on },
   { id: 'build', title: 'More clean supply', body: 'Press G and build the east wind site or the south solar park, then connect it at 66 kV.', target: { world: 'site', id: 'windE' }, done: (st) => !!st.gens.windE || !!st.gens.solarS },
 ];
 
 const ENDING5 = {
   common: ['For a full day and night, every light in Aurora ran on wind, sun and stored energy.', 'Cars charged when the wind blew and gave power back at dusk. Towers eased off at the peak. The grid healed itself.'],
-  sustainable: 'A 100 % clean, reliable and fair city. From one diesel generator to this — the campaign is complete.',
+  sustainable: 'A 100 % clean, reliable and fair city. From one diesel generator to this. The campaign is complete.',
   reliable: 'Clean, reliable power for a whole metropolis. The future arrived.',
-  hardwon: 'It took everything you had — but Aurora ran on clean power.',
+  hardwon: 'It took everything you had, but Aurora ran on clean power.',
   decisions: { smart: 'Smart charging tamed the evening EV rush.', v2g: 'Parked cars became the city’s second battery.', dr: 'The data centre and towers flexed their demand.', healed: 'The network healed itself in under a minute.' },
   next: 'Thank you for playing Gridforge.',
 };
@@ -482,7 +481,7 @@ const ui = {
   endTitle: 'Aurora runs on 100% clean electricity',
   demandNote: 'Apartments and homes peak in the evening; towers by day; the data centre and hospital run around the clock. EV hubs pile onto the evening peak unless smart charging moves them.',
   briefing: {
-    text: 'Aurora is a metropolis that already runs on wind, solar and a city battery — with <b>fossil imports</b> filling the gaps. Make every kWh clean for a <b>full day</b>, without leaving anyone in the dark.',
+    text: 'Aurora is a metropolis that already runs on wind, solar and a city battery, with <b>fossil imports</b> filling the gaps. Make every kWh clean for a <b>full day</b>, without leaving anyone in the dark.',
     goals: ['Smart EV charging, demand response and a self-healing network', '24 hours of 100 % clean electricity with nobody dark', 'Reliability ≥ 99.5 % and fair low-income bills'],
     newSystems: ['<b>Smart charging</b> and <b>vehicle-to-grid</b>', '<b>Demand response</b> and <b>efficiency</b>', '<b>Self-healing</b> networks (tie switches + automation)', 'The <b>100 % clean</b> goal'],
   },
@@ -502,7 +501,7 @@ const ui = {
       case 'feederWarn':
         u.audio.play('warn');
         u.say('feederWarn');
-        u.hud.alert({ id: 'fw', level: 'warn', title: 'Feeder joints running hot', text: u.state.programs?.auto?.on ? 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak — feeder automation is armed.' : 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak. Turn on feeder automation, or be ready to close a tie switch (dashed link).', ttl: 20000, actions: [{ label: 'Programs', primary: true, fn: () => u.select({ kind: 'programs' }) }] });
+        u.hud.alert({ id: 'fw', level: 'warn', title: 'Feeder joints running hot', text: u.state.programs?.auto?.on ? 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak. Feeder automation is ready.' : 'Heat-dome loading is stressing the city feeders. A cable fault is likely around the evening peak. Turn on feeder automation, or be ready to close a tie switch (dashed link).', ttl: 20000, actions: [{ label: 'Programs', primary: true, fn: () => u.select({ kind: 'programs' }) }] });
         break;
       case 'feederFault':
         u.audio.play('trip');
@@ -579,7 +578,7 @@ export default {
   stageName: 'Stage 5 · The 100% Green City',
   name: 'Aurora',
   region: 'Aurora',
-  blurb: 'A metropolis on the edge of 100 % clean power. Add supply, storage and flexibility — and run a full day without a single fossil kWh.',
+  blurb: 'A metropolis on the edge of 100 % clean power. Add supply, storage and flexibility, and run a full day without a single fossil kWh.',
   learns: ['Smart charging & V2G', 'Demand response & efficiency', 'Self-healing networks', '100 % clean electricity'],
   map: MAP5,
   bal: BAL5,
@@ -588,6 +587,20 @@ export default {
   chips: ['credits', 'cash', 'demand', 'mix', 'renew', 'co2', 'weather', 'powered', 'afford'],
   objectives,
   weather: W5,
+  events: {
+    count: [3, 4],
+    avoidH: [[46, 74]], // heat dome, data-centre expansion and the feeder fault (day 3)
+    pool: [
+      { key: 'cyclone', kind: 'cyclone', weight: 2, windowH: [80, 150], warnH: 18, durH: 6, params: { name: 'Mira', track: [-470, 330, 470, 250], width: 120, p: 0.45, max: 3 } },
+      { key: 'windTrip', kind: 'blackout', weight: 1, windowH: [24, 44], warnH: 2, durH: 3 },
+      { key: 'xfmr', kind: 'xfmrFail', weight: 1, windowH: [80, 150], warnH: 3 },
+      { key: 'quake', kind: 'quake', weight: 1, windowH: [80, 150], params: { zone: { x: 0, z: 0, r: 380 }, p: 0.25, max: 3 } },
+      { key: 'campus', kind: 'arrivals', weight: 2, windowH: [24, 44], warnH: 8, durH: 12, params: { group: 'campus', at: { x: 290, z: 150 }, title: 'A tech campus is opening', text: 'Nova Campus, a new office tower for 2,000 workers, opens beside the depot.', say: 'Nova Campus opens soon. Big new load, and they want it clean.', goodNews: 'Nova Campus opens on 100% clean power.', badNews: 'New tech campus opens without power.' } },
+      { key: 'lights', kind: 'festival', weight: 2, windowH: [80, 150], atHour: 18, warnH: 18, durH: 5, params: { name: 'The festival of lights', text: 'Aurora’s festival of lights strings lanterns through every street on the west side.', ids: ['a1', 'a2', 'a3', 'a4', 'r1', 'r2', 's1', 's2', 's3'], mult: 1.25, startH: 18, at: { x: -200, z: 0 }, say: 'Festival of lights tonight! Every home on the west side will be glowing.', goodNews: 'Festival of lights shines on clean power.', badNews: 'Power cut dims the festival of lights.' } },
+      { key: 'solarRoofs', kind: 'request', weight: 1, windowH: [24, 150], params: { who: 'maya', title: 'Solar roofs for the terraces', text: 'Families in the terrace rows ask for help to put solar panels on their roofs. Their bills are the highest share of income in the city.', options: [{ label: 'Fund it · 3,000 ¢', cost: 3000, yes: true, rep: 6, trust: 5, cls: ['lowincome'], note: 'Lower bills and cleaner power.', news: 'Terrace families get help with solar roofs.' }, { label: 'Not now', rep: -3, note: 'The terraces keep paying high bills.' }] } },
+    ],
+    protests: { hvNearHomes: 25, compensation: 3000, outages: 6, credit: 2500 },
+  },
   demandMod,
   prebuilt: PREBUILT,
   init(state) {
@@ -668,7 +681,7 @@ export default {
         sim.cmd({ type: 'program', id: 'v2g', on: true });
         for (const id of EFF) sim.cmd({ type: 'efficiency', target: id });
       }
-      for (const e of sim.drainEvents()) {
+      for (const e of drainAndRespond(sim)) {
         if (e.type === 'feederFault') sim.cmd({ type: 'repair', target: e.target });
         if (e.type === 'dcOffer') sim.cmd({ type: 'dcExpand', accept: false });
       }

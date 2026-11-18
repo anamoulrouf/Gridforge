@@ -6,6 +6,7 @@ import { LINES_BASE as L1 } from '../data/dialogue.js';
 import { fmt } from '../data/strings.js';
 import { runSteps } from '../sim/steps.js';
 import { srcType, ratedKW } from '../sim/power.js';
+import { drainAndRespond } from '../sim/events.js';
 
 const D = 1440;
 const day = (d, h) => (d - 1) * D + h * 60;
@@ -39,11 +40,11 @@ export const MAP4 = {
     { id: 'link', type: 'import', name: 'Regional interconnector', tier: 'HV', x: 60, z: -300, w: 30, d: 20, port: { x: 40, z: -290 }, kw: 1500, running: true, dirX: 1 },
   ],
   sites: [
-    { id: 'wind1', name: 'Ridge wind site', desc: 'Exposed ridge — the best wind in the region', x: 300, z: -220, w: 120, d: 50, tier: 'HV', port: { x: 230, z: -200 }, turbines: 3, options: [{ type: 'wind', kw: 2400, cost: 16000, note: 'Three 800 kW turbines on the ridge. Cut-in 3 m/s, cut-out 25 m/s.' }] },
+    { id: 'wind1', name: 'Ridge wind site', desc: 'An exposed ridge with the best wind in the region', x: 300, z: -220, w: 120, d: 50, tier: 'HV', port: { x: 230, z: -200 }, turbines: 3, options: [{ type: 'wind', kw: 2400, cost: 16000, note: 'Three 800 kW turbines on the ridge. Cut-in 3 m/s, cut-out 25 m/s.' }] },
     { id: 'wind2', name: 'Headland wind site', desc: 'Coastal headland east of the harbour', x: 400, z: 170, w: 60, d: 30, tier: 'MV', port: { x: 360, z: 150 }, turbines: 2, options: [{ type: 'wind', kw: 1400, cost: 10000, note: 'Two turbines on the headland, connecting at 11 kV.' }] },
     { id: 'solar1', name: 'Marsh fields solar site', desc: 'Flat fields south-west of town', x: -140, z: 150, w: 130, d: 70, tier: 'MV', port: { x: -70, z: 120 }, options: [{ type: 'solar', kw: 1500, cost: 11000 }] },
     { id: 'solar2', name: 'North fields solar site', desc: 'Fields north of the main road', x: 130, z: -190, w: 90, d: 50, tier: 'MV', port: { x: 80, z: -170 }, options: [{ type: 'solar', kw: 1000, cost: 7500 }] },
-    { id: 'hydro', name: 'River dam site', desc: 'Narrows on the river — a small reservoir', x: -250, z: -230, w: 30, d: 12, tier: 'MV', port: { x: -225, z: -215 }, options: [{ type: 'hydro', kw: 800, cost: 9000, note: 'Dispatchable and clean, but the reservoir is limited (≈ 6 MWh, refilled slowly by the river).' }] },
+    { id: 'hydro', name: 'River dam site', desc: 'A narrow stretch of river with room for a small reservoir', x: -250, z: -230, w: 30, d: 12, tier: 'MV', port: { x: -225, z: -215 }, options: [{ type: 'hydro', kw: 800, cost: 9000, note: 'Dispatchable and clean, but the reservoir is limited (about 6 MWh, refilled slowly by the river).' }] },
     { id: 'battery', name: 'Battery site', desc: 'Next to the town substation', x: 60, z: -60, w: 34, d: 16, tier: 'MV', port: { x: 40, z: -45 }, options: [{ type: 'battery', kw: 1000, kwh: 4000, cost: 9000 }, { type: 'battery', kw: 2000, kwh: 8000, cost: 16000 }] },
   ],
   depot: { id: 'depot', x: 170, z: -80, w: 18, d: 12 },
@@ -62,6 +63,9 @@ export const MAP4 = {
     { id: 'o1', type: 'office', name: 'Harbour offices', x: 150, z: -32, w: 16, d: 14, floors: 4, label: 'HARBOUR' },
     { id: 'sh1', type: 'shop', name: 'Fish market', x: -140, z: 32, w: 10, d: 9, label: 'FISH' },
     { id: 'port', type: 'port', name: 'Saltmarsh Port', x: 160, z: 195, w: 70, d: 40 },
+    // surprise: a fishing village grows east of the harbour (some runs)
+    { ...street('v1', 'Fisher’s Cottages (new)', 250, 60), surprise: 'village' },
+    { ...street('v2', 'Net Lane cottages (new)', 250, 100), surprise: 'village' },
   ],
 };
 
@@ -101,7 +105,7 @@ export const BAL4 = {
   fail: { clinicOutageH: 6, bankruptGraceH: 6, deadlineDay: 7, debtLimit: -20000 },
 };
 
-const W = { 4: { storm: true, peakHour: 13, label: 'Storm — winds above the 25 m/s cut-out' }, 5: { calm: true, label: 'Calm and overcast — little wind or sun' } };
+const W = { 4: { storm: true, peakHour: 13, label: 'Storm: wind over 25 m/s, too strong for turbines' }, 5: { calm: true, label: 'Calm and cloudy: little wind or sun' } };
 const RENEW = ['solar', 'wind', 'hydro'];
 const renewKW = (st, bal) => Object.values(st.gens).filter((g) => RENEW.includes(g.type)).reduce((s, g) => s + ratedKW(bal, g), 0);
 const powered = (st, id) => st.cust[id].status === 'on' || st.cust[id].status === 'partial';
@@ -130,8 +134,8 @@ const objectives = [
       const unconnected = built.filter((id) => !st.nodes[id]?.connected);
       return {
         title: 'Build 3 MW of renewable generation',
-        why: 'The coal station closes at midnight on day 3. Wind, sun and water are free fuel — but each follows the weather.',
-        steps: [`Press ${k('G')} (Build) and click a marked site: ridge or headland wind, marsh or north solar, the river dam.`, 'Connect each one: wind on the ridge at 66 kV, the others at 11 kV.', 'Mix sources — wind blows at night, the sun shines by day, the dam can be dispatched.'],
+        why: 'The coal station closes at midnight on day 3. Wind, sun and water are free fuel, but each one depends on the weather.',
+        steps: [`Press ${k('G')} (Build) and click a marked site: ridge or headland wind, marsh or north solar, the river dam.`, 'Connect each one: wind on the ridge at 66 kV, the others at 11 kV.', 'Mix your sources. Wind often blows at night, the sun shines by day, and you can run the dam whenever you need it.'],
         now: [info(`Built: ${fmt.kw(renewKW(st, bal))} of 3 MW`), unconnected.length ? warn(`Not connected yet: <b>${unconnected.map((id) => st.map.sites.find((s) => s.id === id)?.name || id).join(', ')}</b>`) : null, info(`Credits ${fmt.cr(st.credits)}`)].filter(Boolean),
         focus: { x: 300, z: -220, sel: { kind: 'site', id: 'wind1' } },
         focusLabel: 'Show the ridge wind site',
@@ -145,7 +149,7 @@ const objectives = [
     eval: (st) => ({ done: !!st.gens.battery && !!st.nodes.battery?.connected }),
     guide: (st) => ({
       title: 'Install battery storage and connect it',
-      why: 'A battery moves energy in time: it stores surplus wind and sun and releases it at the evening peak or on a still day. It can’t create energy (≈ 90 % round trip).',
+      why: 'A battery moves energy in time: it stores surplus wind and sun and releases it at the evening peak or on a still day. It can’t create energy (about 90 % round trip).',
       steps: [`Press ${k('G')} and click the battery site beside the town substation.`, 'Choose 1 MW / 4 MWh or 2 MW / 8 MWh.', `Connect it with an 11 kV line (${k('L')}) to the substation’s 11 kV bus. Leave it on Auto.`],
       now: [st.gens.battery ? (st.nodes.battery.connected ? ok(`Battery at ${Math.round((st.gens.battery.soc / st.gens.battery.kwh) * 100)}%`) : warn('Built but not connected')) : todo('Not built')],
       focus: { x: 60, z: -60, sel: { kind: 'site', id: 'battery' } },
@@ -160,8 +164,8 @@ const objectives = [
     guide: (st) => ({
       title: 'Retire coal without a blackout',
       why: 'At midnight on day 3 the coal station shuts for good. Whatever replaces it must already be running.',
-      steps: ['Have enough clean generation and storage connected before midnight on day 3.', 'The regional interconnector is a fall-back — expensive and fossil-heavy.', 'From 00:00 to 06:00 on day 4 everyone must stay powered, with imports under half of demand.'],
-      now: [st.flags.retireOk ? ok('Coal retired — clean supply carried the town') : st.flags.retireOk === false ? warn(`Missed — ${st.flags.retireImport > 0.5 ? `imports reached ${Math.round(st.flags.retireImport * 100)}% of demand` : 'some customers lost power'}`) : st.gens.coal.retired ? info(`Checking until 06:00 · peak import share so far ${Math.round((st.flags.retireImport || 0) * 100)}%`) : info(`Coal retires in ${fmt.dur(Math.max(0, day(4, 0) - st.clock))}`), info(`Interconnector now: ${fmt.kw(st.gens.link?.outKW || 0)}`)],
+      steps: ['Have enough clean generation and storage connected before midnight on day 3.', 'The regional link is a backup. It’s expensive and mostly fossil power.', 'From 00:00 to 06:00 on day 4 everyone must stay powered, with imports under half of demand.'],
+      now: [st.flags.retireOk ? ok('Coal closed, and clean power carried the town') : st.flags.retireOk === false ? warn(`Missed: ${st.flags.retireImport > 0.5 ? `imports reached ${Math.round(st.flags.retireImport * 100)}% of demand` : 'some customers lost power'}`) : st.gens.coal.retired ? info(`Checking until 06:00 · peak import share so far ${Math.round((st.flags.retireImport || 0) * 100)}%`) : info(`Coal retires in ${fmt.dur(Math.max(0, day(4, 0) - st.clock))}`), info(`Interconnector now: ${fmt.kw(st.gens.link?.outKW || 0)}`)],
       focus: null,
     }),
   },
@@ -185,8 +189,8 @@ const objectives = [
     eval: (st) => ({ done: !!st.flags.calmOk }),
     guide: (st) => ({
       title: 'Keep everyone powered through the calm, overcast day 5',
-      why: 'A “dunkelflaute” — days with neither wind nor much sun — is the hardest test for a renewable grid.',
-      steps: ['Fill the battery and the reservoir on day 4 evening, after the storm.', 'In the Supply panel, move the <b>interconnector to the top</b> of the dispatch order for day 5 — it carries the base load all day.', 'That saves the battery and the dam for the evening peak, when the interconnector alone isn’t enough. Unserved energy must stay under 2 %.'],
+      why: 'Days with no wind and hardly any sun are the hardest test for a renewable grid.',
+      steps: ['Fill the battery and the reservoir on day 4 evening, after the storm.', 'In the Supply panel, move the <b>interconnector to the top</b> of the dispatch order for day 5, so it carries the steady load all day.', 'That saves the battery and the dam for the evening peak, when the interconnector alone isn’t enough. Unserved energy must stay under 2 %.'],
       now: [st.clock < day(5, 0) ? info('Day 5 forecast: calm and overcast') : st.flags.calmOk ? ok('Calm day handled') : info(`Unserved so far: ${(st.flags.calmUnserved || 0).toFixed(2)}%`)],
       focus: null,
     }),
@@ -278,7 +282,7 @@ function director(state, api) {
     const imp = state.gens.link?.outKW || 0;
     const dem = state.flow.townDemandKW || 1;
     F.retireImport = Math.max(F.retireImport || 0, imp / dem);
-    if (!api.map.customers.every((c) => powered(state, c.id)) || imp > 0.5 * dem) F.retireBad = true;
+    if (!api.map.customers.every((c) => state.cust[c.id].active === false || (c.surprise && !state.cust[c.id].dropped) || powered(state, c.id)) || imp > 0.5 * dem) F.retireBad = true;
   }
   if (d === 4 && hm === 6 * 60 && F.retireOk == null) {
     F.retireOk = !F.retireBad;
@@ -358,16 +362,16 @@ function metrics(state, bal) {
   const co2 = (state.days || []).reduce((a, x) => a + x.co2, 0) / 1000;
   return {
     powered: state.flow.powered,
-    total: state.map.customers.length,
+    total: state.flow.activeCount ?? state.map.customers.length,
     decisions: { battery: !!state.gens.battery, hydro: !!state.gens.hydro, prosumer: STREETS.some((id) => state.prosumers?.[id]), storm: !!state.flags.stormOk },
     cells: [
-      ['Customers powered', `${state.flow.powered} / ${state.map.customers.length}`],
+      ['Customers powered', `${state.flow.powered} / ${state.flow.activeCount ?? state.map.customers.length}`],
       ['Renewables built', fmt.kw(renewKW(state, bal))],
       ['Best renewable day', `${Math.round(bestShare(state))}%`],
-      ['Reliability', `${s.custMinTotal ? ((s.custMinPowered / s.custMinTotal) * 100).toFixed(1) : '—'}%`],
+      ['Reliability', `${s.custMinTotal ? ((s.custMinPowered / s.custMinTotal) * 100).toFixed(1) + '%' : 'n/a'}`],
       ['CO₂ (all days)', `${co2.toFixed(1)} t`],
-      ['Storm day reliability', state.flags.stormRel != null ? `${state.flags.stormRel.toFixed(1)}%` : '—'],
-      ['Calm day unserved', state.flags.calmUnserved != null ? `${state.flags.calmUnserved.toFixed(2)}%` : '—'],
+      ['Storm day reliability', state.flags.stormRel != null ? `${state.flags.stormRel.toFixed(1)}%` : 'n/a'],
+      ['Calm day: demand not met', state.flags.calmUnserved != null ? `${state.flags.calmUnserved.toFixed(2)}%` : 'n/a'],
       ['Operating result', fmt.cr((state.days || []).reduce((a, x) => a + x.net, 0))],
       ['Prosumer streets', `${STREETS.filter((id) => state.prosumers?.[id]).length} / 6`],
     ],
@@ -377,30 +381,30 @@ function metrics(state, bal) {
 // ------------------------------------------------------------------ narrative
 const LEARN4 = {
   variable: { title: 'Variable renewables', what: 'Your first wind or solar farm is producing.', why: 'Their output follows the weather: solar is zero at night and drops under cloud; wind turbines start at 3 m/s, reach full power at 12 m/s and shut down above 25 m/s to protect themselves.', todo: ['Mix wind (often strong at night) with solar (midday).', 'Use the forecast in the Supply panel.', 'Add storage or dispatchable hydro for still, dark hours.'], real: 'Grid operators forecast wind and solar hours ahead to schedule everything else.' },
-  storage: { title: 'Storage moves energy in time', what: 'Your battery is charging from surplus clean power.', why: 'It stores energy when supply exceeds demand and releases it later. About 10 % is lost each round trip — it can’t create energy.', todo: ['Leave it on Auto for normal operation.', 'Set “Charge only” before a storm or calm spell, then back to Auto.'], real: 'Grid batteries now routinely shift solar from midday to the evening peak.' },
-  retire: { title: 'Coal retires tonight', what: 'The coal station closes at midnight.', why: 'It is old, polluting and expensive to keep running. Its 3 MW must be replaced by clean sources and storage.', todo: ['Check the Supply panel: will tonight’s clean supply plus storage cover the peak?', 'The interconnector covers gaps — at a cost and with fossil emissions.'], real: 'Regions plan coal closures years ahead so replacement capacity is online first.' },
+  storage: { title: 'Storage moves energy in time', what: 'Your battery is charging from surplus clean power.', why: 'It stores energy when supply exceeds demand and releases it later. About 10% is lost on the way in and out. It can’t create energy.', todo: ['Leave it on Auto for normal operation.', 'Set “Charge only” before a storm or calm spell, then back to Auto.'], real: 'Grid batteries now routinely shift solar from midday to the evening peak.' },
+  retire: { title: 'Coal retires tonight', what: 'The coal station closes at midnight.', why: 'It is old, polluting and expensive to keep running. Its 3 MW must be replaced by clean sources and storage.', todo: ['Check the Supply panel: will tonight’s clean supply plus storage cover the peak?', 'The regional link fills gaps, but it costs money and brings fossil emissions.'], real: 'Regions plan coal closures years ahead so replacement capacity is online first.' },
   storm: { title: 'Storm tomorrow', what: 'A storm is forecast for day 4.', why: 'Winds above 25 m/s force turbines to shut down; cloud cuts solar; lines can be damaged.', todo: ['Charge the battery (Charge only) tonight.', 'Keep the dam reservoir full.', 'Keep a repair kit ready.'], real: 'Operators prepare for storms by securing reserves and pre-positioning crews.' },
-  calm: { title: 'A calm, overcast day ahead', what: 'Tomorrow will have almost no wind and little sun.', why: 'Long still, grey spells are the hardest test for renewable grids. If the battery runs first thing in the morning, it’s empty by the evening peak.', todo: ['Refill storage and the reservoir tonight.', 'For tomorrow, put the interconnector first in the dispatch order so it carries the base load.', 'Keep the battery and dam for the evening peak — then switch the order back.'], real: 'Long-duration storage, hydro and interconnectors are how renewable-heavy grids handle these spells.' },
+  calm: { title: 'A calm, overcast day ahead', what: 'Tomorrow will have almost no wind and little sun.', why: 'Long still, grey spells are the hardest test for renewable grids. If the battery runs first thing in the morning, it’s empty by the evening peak.', todo: ['Refill storage and the reservoir tonight.', 'For tomorrow, put the interconnector first in the dispatch order so it carries the base load.', 'Save the battery and dam for the evening peak, then switch the order back.'], real: 'Long-duration storage, hydro and interconnectors are how renewable-heavy grids handle these spells.' },
   prosumer: { title: 'Prosumers', what: 'Homes on the program now make their own power.', why: 'They use it first and export the surplus, which you buy at the export price. At midday this can push power backwards through local transformers.', todo: ['Watch midday transformer loading.', 'Storage absorbs surplus exports.'], real: 'Net metering and feed-in tariffs pay rooftop solar owners for exported power.' },
 };
 
 const LINES4 = {
   ...L1,
-  intro: [['advisor', 'Saltmarsh still runs on coal — but the station closes at midnight on day 3.'], ['sofia', 'We have wind on the ridge, sun on the marshes and a dam site on the river. Let’s build the replacement.']],
+  intro: [['advisor', 'Saltmarsh still runs on coal, but the station closes at midnight on day 3.'], ['sofia', 'We have wind on the ridge, sun on the marshes and a dam site on the river. Let’s build the replacement.']],
   firstRenew: [['sofia', 'First clean power on the grid! Watch how it follows the weather.']],
   stormForecast: [['advisor', 'Storm warning for tomorrow: gusts above the turbines’ cut-out. Charge the battery tonight.']],
   calmForecast: [['advisor', 'After the storm: a calm, grey day. Little wind, little sun. Fill the storage tonight.']],
   retireSoon: [['daniel', 'Coal shuts at midnight. Make sure the clean side can carry the evening.']],
-  retireOk: [['maya', 'The coal station went quiet and nobody noticed — the lights stayed on.']],
+  retireOk: [['maya', 'The coal station went quiet and nobody noticed. The lights stayed on.']],
   retireMissed: [['sofia', 'We lost customers when coal shut down. Add clean capacity or storage fast.']],
   stormDamage: [['sofia', 'The storm brought a line down. Crew, please.']],
-  stormOk: [['maya', 'What a storm — and the hospital never lost power.']],
-  calmOk: [['sofia', 'Still and grey all day — storage and the dam carried us. That’s a real renewable grid.']],
-  tutorialDone: [['advisor', 'You know the coast now. Keep it clean — and keep it on.']],
+  stormOk: [['maya', 'What a storm! And the hospital never lost power.']],
+  calmOk: [['sofia', 'Still and grey all day, and storage and the dam carried us. That’s a real renewable grid.']],
+  tutorialDone: [['advisor', 'You know the coast now. Keep it clean, and keep it on.']],
 };
 
 const TUT4 = [
-  { id: 'mix', title: 'Know your weather', body: 'Click the Supply chip. The forecast shows sun (top) and wind (bottom) for the next 24 hours — and a storm and a calm day are coming.', target: { ui: '#chip-mix' }, done: (st) => !!st.inspected.mix },
+  { id: 'mix', title: 'Know your weather', body: 'Click the Supply chip. The forecast shows sun (top) and wind (bottom) for the next 24 hours. A storm and a calm day are coming.', target: { ui: '#chip-mix' }, done: (st) => !!st.inspected.mix },
   { id: 'wind', title: 'Build wind on the ridge', body: 'Press G and click the ridge wind site (north-east). It connects at 66 kV: press L, click it, and run towers to the town substation.', target: { world: 'site', id: 'wind1' }, done: (st) => !!st.gens.wind1 && st.nodes.wind1?.connected },
   { id: 'solar', title: 'Add solar', body: 'Build a solar site (G) and connect it at 11 kV to the nearest 11 kV line or the substation.', target: { world: 'site', id: 'solar1' }, done: (st) => Object.values(st.gens).some((g) => g.type === 'solar') },
   { id: 'battery', title: 'Store it', body: 'Build the battery beside the substation and connect it at 11 kV. Auto mode stores surplus and covers shortfalls.', target: { world: 'site', id: 'battery' }, done: (st) => !!st.gens.battery && st.nodes.battery?.connected },
@@ -408,12 +412,12 @@ const TUT4 = [
 ];
 
 const ENDING4 = {
-  common: ['The coal station’s chimneys are cold now.', 'Wind on the ridge, sun on the marshes, water behind the dam — and the lights stayed on through storm and calm.'],
+  common: ['The coal station’s chimneys are cold now.', 'Wind on the ridge, sun on the marshes, water behind the dam, and the lights stayed on through storm and calm.'],
   sustainable: 'Saltmarsh runs mostly on clean power, affordably and reliably. The transition worked.',
-  reliable: 'Clean power carries most days, with the interconnector as a safety net — a solid transition.',
+  reliable: 'Clean power carries most days, with the regional link as a safety net. A solid change.',
   hardwon: 'It was rough at times, but the coast left coal behind.',
   decisions: { battery: 'Your battery shifted sunshine into the evening peak.', hydro: 'The dam gave you clean power on demand.', prosumer: 'Hundreds of rooftops became small power stations.', storm: 'You kept the hospital lit through the storm.' },
-  next: 'Next: Aurora — a whole metropolis, powered by 100 % clean electricity.',
+  next: 'Next: Aurora, a whole city running on 100% clean electricity.',
 };
 
 const ui = {
@@ -424,7 +428,7 @@ const ui = {
   endTitle: 'Saltmarsh leaves coal behind',
   demandNote: 'Apartments and streets of homes peak in the evening; offices, the market and the port by day; the hospital never stops.',
   briefing: {
-    text: 'The Saltmarsh coal station <b>retires at midnight on day 3</b>. Replace it with wind, solar, hydro and storage — then survive a <b>storm</b> on day 4 and a <b>calm, overcast</b> day 5.',
+    text: 'The Saltmarsh coal station <b>retires at midnight on day 3</b>. Replace it with wind, solar, hydro and batteries, then get through a <b>storm</b> on day 4 and a <b>calm, cloudy</b> day 5.',
     goals: ['Build 3 MW of renewables and a battery', 'Retire coal without a blackout', 'Ride out the storm and the calm day', 'One full day at ≥ 70 % renewable electricity'],
     newSystems: ['<b>Solar</b>, <b>wind</b> and <b>hydro</b> following the <b>weather</b>', '<b>Battery storage</b> (state of charge, modes)', '<b>Prosumers</b>: rooftop solar and exports', '<b>Emissions</b> and <b>renewable share</b>'],
   },
@@ -459,7 +463,7 @@ const ui = {
       case 'stormDamage':
         u.audio.play('trip');
         u.say('stormDamage');
-        u.hud.alert({ id: 'stormdmg', level: 'critical', title: 'Storm damage — a line is down', text: 'Send the repair crew.', actions: [{ label: 'Send repair crew', primary: true, fn: () => u.cmd({ type: 'repair', target: e.target }).ok && u.hud.dismiss('stormdmg') }, u.focusAct(e.target)] });
+        u.hud.alert({ id: 'stormdmg', level: 'critical', title: 'Storm damage: a line is down', text: 'Send the repair crew.', actions: [{ label: 'Send repair crew', primary: true, fn: () => u.cmd({ type: 'repair', target: e.target }).ok && u.hud.dismiss('stormdmg') }, u.focusAct(e.target)] });
         break;
       case 'stormOk':
         u.audio.play('objective');
@@ -534,7 +538,7 @@ export default {
   stageName: 'Stage 4 · The Green Transition',
   name: 'Saltmarsh Coast',
   region: 'Saltmarsh',
-  blurb: 'The coal station retires on day 3. Replace it with wind, sun, water and storage — and keep the lights on through a storm and a still, grey day.',
+  blurb: 'The coal station retires on day 3. Replace it with wind, sun, water and batteries, and keep the lights on through a storm and a still, grey day.',
   learns: ['Solar & wind follow the weather', 'Storage moves energy in time', 'Prosumers & exports', 'Emissions & renewable share'],
   map: MAP4,
   bal: BAL4,
@@ -543,6 +547,21 @@ export default {
   chips: ['credits', 'cash', 'demand', 'mix', 'renew', 'co2', 'weather', 'powered', 'rel'],
   objectives,
   weather: W,
+  events: {
+    count: [3, 4],
+    avoidH: [[58, 121]], // storm, coal retirement and the calm day (day 3 noon to the end of day 5)
+    pool: [
+      { key: 'tsunami', excl: 'tsunami', kind: 'tsunami', weight: 2, windowH: [26, 56], warnH: 2, durH: 3, params: { area: 'the harbour front', zone: { poly: [[-470, 168], [470, 168], [470, 285], [-470, 285]] }, maxLines: 3 } },
+      { key: 'tsunami2', excl: 'tsunami', kind: 'tsunami', weight: 1, windowH: [124, 156], warnH: 2, durH: 3, params: { area: 'the harbour front', zone: { poly: [[-470, 168], [470, 168], [470, 285], [-470, 285]] }, maxLines: 3 } },
+      { key: 'flood', kind: 'flood', weight: 1, windowH: [124, 156], warnH: 4, durH: 4, params: { area: 'the river banks west of town', zone: { poly: [[-300, -210], [-196, -210], [-196, 130], [-300, 130]] } } },
+      { key: 'xfmr', kind: 'xfmrFail', weight: 1, windowH: [124, 156], warnH: 3 },
+      { key: 'linkTrip', kind: 'blackout', weight: 1, windowH: [124, 156], warnH: 2, durH: 3 },
+      { key: 'village', kind: 'arrivals', weight: 2, windowH: [26, 56], warnH: 8, durH: 12, params: { group: 'village', at: { x: 250, z: 80 }, title: 'A fishing village is growing', text: 'Fishing families are moving into new cottages east of the harbour, with solar panels on their roofs.', say: 'The fishing families east of the harbour want to join the grid. Their roofs are covered in solar panels!', goodNews: 'Fishing village joins the grid, rooftop solar and all.', badNews: 'New fishing village still waiting to be connected.' } },
+      { key: 'harbourFest', kind: 'festival', weight: 2, windowH: [124, 156], atHour: 18, warnH: 18, durH: 5, params: { name: 'The harbour festival', text: 'Saltmarsh’s harbour festival fills the waterfront with music, lights and food stalls.', ids: ['a3', 'a4', 'a5', 'a6', 'sh1', 'hospital', 'school'], mult: 1.3, startH: 18, at: { x: 0, z: 80 }, say: 'Harbour festival tonight! It’s the biggest night of the year on the coast.', goodNews: 'Harbour festival glows all night, powered by clean energy.', badNews: 'Blackout leaves the harbour festival in darkness.' } },
+      { key: 'shore', kind: 'request', weight: 1, windowH: [26, 150], params: { who: 'maya', title: 'Shore power for the fishing boats', text: 'The fishing co-op asks for charging points on the quay so boats can stop running diesel engines in the harbour.', options: [{ label: 'Install shore power · 1,200 ¢', cost: 1200, yes: true, rep: 6, trust: 3, note: 'Cleaner air on the quay.', news: 'Fishing boats plug into clean shore power.' }, { label: 'Not now', rep: -3, note: 'The boats keep idling their engines.' }] } },
+    ],
+    protests: { hvNearHomes: 25, compensation: 2000, outages: 5, credit: 1500 },
+  },
   prebuilt: PREBUILT,
   init(state) {
     state.started = true;
@@ -586,7 +605,7 @@ export default {
       }
       if (hm === 0 && d === 5) sim.cmd({ type: 'dispatchOrder', order: ['import', 'hydro', 'battery', 'coal'] });
       if (hm === 0 && d === 6) sim.cmd({ type: 'dispatchOrder', order: ['battery', 'hydro', 'coal', 'import'] });
-      for (const e of sim.drainEvents()) if (e.type === 'stormDamage' || e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
+      for (const e of drainAndRespond(sim)) if (e.type === 'stormDamage' || e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
     }
   },
   ui,

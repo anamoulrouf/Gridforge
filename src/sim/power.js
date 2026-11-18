@@ -374,6 +374,17 @@ export function solve(state, bal, ctx = {}) {
   // ---- write loads onto edges and transformers (+ 24 h forecast in one pass, §10 telegraphing)
   for (const id in state.edges) state.edges[id].loadKW = load.get(id) || 0;
   const fc = {};
+  // upcoming festivals raise the forecast for the hours they run
+  const fests = (state.ev?.deck || []).filter((d) => d.kind === 'festival' && (d.phase === 'warned' || d.phase === 'active') && d.ids);
+  const fm = (id, h) => {
+    let m = 1;
+    for (const d of fests) {
+      const h0 = d.p.startH ?? 18;
+      const dur = (d.endAt - d.hitAt) / 60;
+      if (d.ids.includes(id) && ((h - h0 + 24) % 24) < dur) m *= d.p.mult ?? 1.6;
+    }
+    return m;
+  };
   for (const c of customers) {
     const cs = cust[c.id];
     if (cs.active === false) continue;
@@ -381,7 +392,7 @@ export function solve(state, bal, ctx = {}) {
     for (const xid of [cs.xfmr, cs.sub]) {
       if (!xid) continue;
       const arr = (fc[xid] ||= new Array(24).fill(0));
-      for (let h = 0; h < 24; h++) arr[h] += t.nominal * t.profile(h) * (c.scale || 1);
+      for (let h = 0; h < 24; h++) arr[h] += t.nominal * t.profile(h) * (c.scale || 1) * (fests.length ? fm(c.id, h) : 1);
     }
   }
   for (const id in state.nodes) {

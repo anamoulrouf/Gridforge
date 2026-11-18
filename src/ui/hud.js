@@ -13,7 +13,7 @@ export function createHud(ui, labelsEl, cb) {
     credits: chip('credits', 'coins', 'Credits', { title: 'Cash available. Construction is paid up front; customers pay their bills at midnight.' }),
     demand: chip('demand', 'home', 'Demand', { button: true, onclick: () => cb.onDemand(), title: 'Power all 13 customers want right now (kW). Click for the daily demand curve.' }),
     gen: chip('gen', 'bolt', 'Generation', { title: 'Power the generator is producing now (kW): what customers receive plus network losses.', bar: true }),
-    fuel: chip('fuel', 'fuel', 'Fuel', { title: 'Diesel in the tank. ~1 unit per 20 kWh. Order more at the generator (6 h delivery).', bar: true }),
+    fuel: chip('fuel', 'fuel', 'Fuel', { title: 'Diesel in the tank. about 1 unit per 20 kWh. Order more at the generator (6 h delivery).', bar: true }),
     powered: chip('powered', 'eye', 'Powered', { title: 'Customers receiving power out of 13.' }),
     rel: chip('rel', 'shield', 'Reliability', { title: 'Share of customer-hours with power since first light.' }),
     loss: chip('loss', 'wave', 'Losses', { title: 'Energy lost as heat in lines and transformers (simplified model).' }),
@@ -23,6 +23,7 @@ export function createHud(ui, labelsEl, cb) {
     renew: chip('renew', 'leaf', 'Renewable', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Share of electricity from clean sources right now (today’s average in the panel).', bar: true }),
     co2: chip('co2', 'cloud', 'CO₂ today', { title: 'Emissions so far today from fossil generation.' }),
     mix: chip('mix', 'bolt', 'Supply', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Generation by source. Click for dispatch order and the weather forecast.', bar: true }),
+    rep: chip('rep', 'heart', 'Reputation', { button: true, onclick: () => cb.onPanel?.('community'), title: 'What people think of your utility (0 to 100). It rises when the lights stay on and you treat people fairly. Click for details.', bar: true }),
     weather: chip('weather', 'sun', 'Weather', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Sun, cloud and wind now. Click for the 24 h forecast.' }),
   };
   let M = STAGES[0];
@@ -44,6 +45,7 @@ export function createHud(ui, labelsEl, cb) {
       { class: 'clockbox' },
       clockEl,
       h('div', { class: 'speed', role: 'group', 'aria-label': 'Simulation speed' }, speedBtns),
+      h('button', { class: 'iconbtn', id: 'btn-news', title: 'The Gazette: local news about your grid', 'aria-label': 'Open the Gazette', html: `${icon('news')}<i class="badge" hidden></i>`, onclick: () => cb.onPanel?.('news') }),
       h('button', { class: 'iconbtn', id: 'btn-sound', title: 'Sound on/off', 'aria-label': 'Toggle sound', html: icon('sound'), onclick: () => cb.onSound() }),
       h('button', { class: 'iconbtn', title: 'Pause menu (Esc)', 'aria-label': 'Pause menu', html: icon('menu'), onclick: () => cb.onMenu() }),
     ),
@@ -66,7 +68,7 @@ export function createHud(ui, labelsEl, cb) {
     toolBtns[t] = h('button', {
       class: 'tool',
       id: 'tool-' + t,
-      title: `${S.tools[t].name} (${S.tools[t].key}) — ${S.tools[t].hint}`,
+      title: `${S.tools[t].name} (${S.tools[t].key}): ${S.tools[t].hint}`,
       'aria-label': `${S.tools[t].name} tool, key ${S.tools[t].key}`,
       html: `${icon(toolIcons[t])}<span>${S.tools[t].name}</span><kbd>${S.tools[t].key}</kbd>${t === 'overlay' ? '<span class="sub" id="overlay-name">Flow</span>' : ''}`,
       onclick: () => (t === 'overlay' ? cb.onOverlay() : cb.onTool(t)),
@@ -205,7 +207,7 @@ export function createHud(ui, labelsEl, cb) {
     M = m;
     objTitle.innerHTML = `<span>${esc(m.stageName)}</span>`;
     objName.textContent = m.name;
-    document.title = `Gridforge — ${m.name}`;
+    document.title = `Gridforge: ${m.name}`;
     document.getElementById('brand').innerHTML = `${S.title}<small>${esc(m.name)}</small>`;
     const want = m.chips.join(',');
     if (want !== shownChips) {
@@ -213,6 +215,7 @@ export function createHud(ui, labelsEl, cb) {
       const box = topbar.querySelector('.chips');
       box.innerHTML = '';
       for (const k of m.chips) if (chips[k]) box.append(chips[k]);
+      box.append(chips.rep);
     }
     chips.demand.dataset.t1 ||= chips.demand.title;
     chips.powered.dataset.t1 ||= chips.powered.title;
@@ -225,6 +228,10 @@ export function createHud(ui, labelsEl, cb) {
     const f = state.flow;
     const bal = ux.bal;
     const g = state.gen || Object.values(state.gens).find((x) => x.fuel != null) || null;
+    if (state.ev) {
+      const r = state.ev.rep;
+      setChip(chips.rep, `${Math.round(r)}`, r >= 70 ? 'good' : r < 40 ? 'bad' : r < 55 ? 'warn' : '', r);
+    }
     setChip(chips.credits, fmt.cr(state.credits), state.credits < 300 ? 'warn' : state.credits < 0 ? 'bad' : '');
     setChip(chips.demand, fmt.kw(f.townDemandKW || 0));
     const anyOn = Object.values(state.gens).some((x) => x.status === 'running');
@@ -239,7 +246,7 @@ export function createHud(ui, labelsEl, cb) {
     setChip(chips.powered, `${f.powered} / ${total}`, f.powered === total ? 'good' : '');
     if (state.days) {
       const last = state.days[state.days.length - 1];
-      setChip(chips.cash, last ? `${last.net >= 0 ? '+' : '−'}${fmt.cr(Math.abs(last.net))}` : '—', last ? (last.net >= 0 ? 'good' : 'warn') : '');
+      setChip(chips.cash, last ? `${last.net >= 0 ? '+' : '−'}${fmt.cr(Math.abs(last.net))}` : 'None yet', last ? (last.net >= 0 ? 'good' : 'warn') : '');
     }
     if (state.trust) {
       const vals = Object.values(state.trust);
@@ -259,8 +266,8 @@ export function createHud(ui, labelsEl, cb) {
     }
     const s = state.stats;
     const rel = s.custMinTotal > 0 ? (s.custMinPowered / s.custMinTotal) * 100 : null;
-    setChip(chips.rel, rel == null ? '—' : fmt.pct(rel), rel != null && rel < 80 ? 'warn' : '');
-    setChip(chips.loss, f.genKW > 0 ? `${(f.lossPct || 0).toFixed(1)}%` : '—', f.lossPct > 5 ? 'warn' : '');
+    setChip(chips.rel, rel == null ? 'Not yet' : fmt.pct(rel), rel != null && rel < 80 ? 'warn' : '');
+    setChip(chips.loss, f.genKW > 0 ? `${(f.lossPct || 0).toFixed(1)}%` : 'Not yet', f.lossPct > 5 ? 'warn' : '');
     const c = fmt.clock(state.clock);
     clockEl.innerHTML = `<div class="day">Day ${c.day}</div><div class="time">${c.time}</div>${state.started ? '' : '<div class="frozen">time frozen</div>'}`;
     speedBtns.forEach((b, i) => b.classList.toggle('on', ux.paused ? i === 0 : i === ux.speed));
@@ -358,6 +365,21 @@ export function createHud(ui, labelsEl, cb) {
     }, 9000 + text.length * 25);
   }
 
+  // ---------------------------------------------------------------- the Gazette (local news)
+  let unread = 0;
+  function news(e) {
+    unread++;
+    const b = topbar.querySelector('#btn-news .badge');
+    b.hidden = false;
+    b.textContent = unread;
+    alert({ id: 'news', level: e.tone === 'bad' ? 'warn' : e.tone === 'good' ? 'good' : 'info', title: 'The Gazette', text: `“${esc(e.text)}”`, ttl: 7000, actions: [{ label: 'Read the news', fn: () => cb.onPanel?.('news') }] });
+  }
+  function newsRead() {
+    unread = 0;
+    const b = topbar.querySelector('#btn-news .badge');
+    if (b) b.hidden = true;
+  }
+
   let capTimer = null;
   function caption(text) {
     captions.textContent = text;
@@ -381,7 +403,7 @@ export function createHud(ui, labelsEl, cb) {
     compassBtn.querySelector('svg').style.transform = `rotate(${deg}deg)`;
   }
   const LEG = {
-    flow: [['#ffcf3a', 'Energised 400 V'], ['repeating-linear-gradient(0deg,#f0c860 0 2px,transparent 2px 4px)', 'Energised 11 kV (double)'], ['repeating-linear-gradient(90deg,#4a4038 0 5px,transparent 5px 8px)', 'Dead (dashed)']],
+    flow: [['#ffcf3a', 'Live 400 V'], ['repeating-linear-gradient(0deg,#f0c860 0 2px,transparent 2px 4px)', 'Live 11 kV (double)'], ['repeating-linear-gradient(90deg,#4a4038 0 5px,transparent 5px 8px)', 'No power (dashed)']],
     capacity: [['#74d36b', '< 60% load'], ['#ff9f3a', '85–100%'], ['#ff5a4e', 'Overloaded']],
     tier: [['#ff8a4a', '11 kV (MV)'], ['#ffcf3a', '400 V (LV)']],
     condition: [['#74d36b', 'Good > 70%'], ['#ff9f3a', 'Worn 40–70%'], ['#ff5a4e', 'Poor < 40%']],
@@ -424,5 +446,5 @@ export function createHud(ui, labelsEl, cb) {
     }
   }
 
-  return { setMission, show, update, setTool, closeObjCard: () => (card.id ? (closeCard(true), true) : false), alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
+  return { news, newsRead, setMission, show, update, setTool, closeObjCard: () => (card.id ? (closeCard(true), true) : false), alert, dismiss, clearAlerts, say, caption, setHint, showTip, setCompass, setLegend, updateLabels, el: { topbar, objectives, toolbar, alerts, legend } };
 }

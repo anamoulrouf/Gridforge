@@ -1,4 +1,4 @@
-# Gridforge — a five-stage electricity-network campaign
+# Gridforge: a five-stage electricity-network campaign
 
 A 3D electricity-network strategy game built from `reso/Gridforge_Game_Design_Document.html`, in the warm toy-diorama art style of `reso/graphic/`. Hover any objective in the left rail for step-by-step help and a live status read-out. Left-drag pans the map; the wheel zooms; Q/E rotate.
 
@@ -12,21 +12,27 @@ A 3D electricity-network strategy game built from `reso/Gridforge_Game_Design_Do
 | 4 · Saltmarsh Coast | Saltmarsh | Solar, wind, hydro and batteries driven by the weather, prosumers, emissions, coal retirement, storm and calm days |
 | 5 · Aurora | Aurora | Smart EV charging, V2G, demand response, efficiency, self-healing feeders, a full day of 100 % clean power |
 
+## Every run is different
+Each playthrough draws its own events from the region: floods, a tsunami, earthquakes, a cyclone, blackouts, failing transformers, new neighbours and whole new localities, festivals, community requests and protests. Dangers are announced ahead of time (earthquakes excepted) with a one-click response. A **Reputation** chip, the **Community** panel and **The Gazette** show what people think of you, and it counts towards your score. Restart keeps the same events; New Game deals new ones.
+
 ## Build & test
 ```bash
 npm install
 node build.mjs          # → dist/gridforge.html
-npm test                # simulation unit tests (node:test): Stage 1 + campaign
+npm test                # unit tests: Stage 1, campaign, run events (about 4 min)
+node serve.mjs          # http://localhost:4173/gridforge.html
 ```
 Browser regression scripts are Playwright functions run with the page at `?test=1`. Serve `dist/` first with `node serve.mjs` (http://localhost:4173/gridforge.html, local only).
 - `tests/playthrough.js` and `tests/paths.js` cover Stage 1.
 - `tests/campaign.js` drives the campaign shell and each stage's new tools through the real UI.
 - `tests/stages-visual.js` captures review screenshots and fps for Stages 2–5.
+- `tests/events.js` plays a disaster, surprise, request and festival in every stage.
+- `tests/line-overload.js` checks the overload explanation and its fix.
 
 ## Layout
-- `src/sim/` — deterministic simulation: grid graph, power solver, weather, economy, and replayable step scripts. No DOM or Three.js.
-- `src/missions/` — one file per stage. Each holds the map, balance, objectives with guide cards, the director (scripted events), tutorial, dialogue, ending and reference strategy.
-- `src/render/` — Three.js scene, network visuals, world builders (statically batched), people and particles.
-- `src/ui/`, `src/audio/` — HUD, inspector panels, menus and campaign screen, procedural audio.
-- `src/data/` — shared balance numbers, strings and dialogue.
-- `review/` — rubrics, review rounds and screenshots. The latest round is `review/round-5.md`.
+- `src/sim/`: deterministic simulation: grid graph, power solver, weather, economy, run events (`events.js`), and replayable step scripts. No DOM or Three.js.
+- `src/missions/`: one file per stage. Each holds the map, balance, objectives with guide cards, the director (scripted events), tutorial, dialogue, ending and reference strategy.
+- `src/render/`: Three.js scene, network visuals, world builders (statically batched), people and particles.
+- `src/ui/`, `src/audio/`: HUD, inspector panels, menus and campaign screen, procedural audio.
+- `src/data/`: shared balance numbers, strings and dialogue.
+- `review/`: rubrics, review rounds and screenshots. The latest round is `review/round-6.md`. Copy rules: `review/COPY-STYLE.md`.

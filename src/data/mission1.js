@@ -32,6 +32,10 @@ export const MISSION1 = {
     { id: 'h8', type: 'home', name: 'Kowalski home', x: 10, z: 42, w: 8, d: 8 },
     { id: 'h9', type: 'home', name: 'Adeyemi home', x: 58, z: 48, w: 8, d: 8 },
     { id: 'h10', type: 'home', name: 'Sato home', x: 80, z: 24, w: 8, d: 8 },
+    // surprise: new neighbours on the east lane (appear during some runs)
+    { id: 'n1', type: 'home', name: 'Nakamura home (new)', x: 84, z: -20, w: 8, d: 8, surprise: 'lane' },
+    { id: 'n2', type: 'home', name: 'Petrov home (new)', x: 100, z: -20, w: 8, d: 8, surprise: 'lane' },
+    { id: 'n3', type: 'home', name: 'Silva home (new)', x: 84, z: -38, w: 8, d: 8, surprise: 'lane' },
   ],
 
   // Reference solution used by tests (and documented in the plan): 13 poles, ~333 m, 2 transformers.

@@ -28,7 +28,11 @@ export function evalObjective(state, id) {
       return { done: ok, progress: null };
     }
     case 'connect':
-      return { done: f.connected === state.map.customers.length, progress: [f.connected || 0, state.map.customers.length] };
+    {
+      const base = state.map.customers.filter((c) => !c.surprise);
+      const k = base.filter((c) => state.cust[c.id].connected).length;
+      return { done: k === base.length, progress: [k, base.length] };
+    }
     case 'start':
       return { done: state.gen.status === 'running' && f.powered > 0 && f.deficitKW < 0.01, progress: null };
     case 'revenue':
@@ -76,7 +80,7 @@ export function computeMetrics(state) {
   conds.push(state.gen.condition);
   return {
     powered: state.flow.powered,
-    total: state.map.customers.length,
+    total: state.map.customers.filter((c) => state.cust[c.id].active !== false).length,
     kWh: s.kWhDelivered,
     avgKW: hours > 0 ? s.kWhDelivered / hours : 0,
     peakKW: s.peakKW,

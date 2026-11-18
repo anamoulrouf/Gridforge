@@ -82,7 +82,7 @@ export function createMenus(ui) {
       h('div', { class: 'tag', text: S.tagline }),
       h('div', { class: 'stage', text: 'Campaign · five regions · from the first light to a 100% green city' }),
       h('div', { class: 'items' }, items),
-      h('div', { class: 'foot', text: 'Numbers are simplified, illustrative models — not engineering data.' }),
+      h('div', { class: 'foot', text: 'The numbers are simplified to make the game clear. They aren’t real engineering data.' }),
     );
     ui.append(el);
     setTimeout(() => el.querySelector('button')?.focus(), 50);
@@ -94,7 +94,7 @@ export function createMenus(ui) {
     const tabs = [
       ['Controls', () => `<table class="ctable">${S.help.controls.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`],
       ['Building', () => `<ul class="blist">${S.help.building.map((l) => `<li>${l}</li>`).join('')}</ul>`],
-      ['Electricity basics', () => `<ul class="blist">${S.help.basics.map((l) => `<li>${l}</li>`).join('')}</ul><p class="note">Gridforge uses simplified, consistent rules — it is a strategy game, not an engineering tool.</p>`],
+      ['Electricity basics', () => `<ul class="blist">${S.help.basics.map((l) => `<li>${l}</li>`).join('')}</ul><p class="note">Gridforge uses simple, consistent rules. It’s a strategy game, not an engineering tool.</p>`],
       ['Objectives', () => `<ul class="blist">${S.help.objectives.map((l) => `<li>${l}</li>`).join('')}</ul>`],
     ];
     const body = h('div');
@@ -154,9 +154,9 @@ export function createMenus(ui) {
       select('quality', 'Graphics quality', [['high', 'High (bloom + shadows)'], ['medium', 'Medium'], ['low', 'Low (fastest)']]),
       toggle('tutorial', 'Guided tutorial', 'Step-by-step help in a new game'),
       toggle('autoPause', 'Pause on major events', 'Learning panels pause time while open'),
-      toggle('unlockAll', 'Unlock all stages', 'Review switch — play any campaign stage without finishing the previous one'),
+      toggle('unlockAll', 'Unlock all stages', 'Play any stage without finishing the one before'),
     );
-    const dev = extras.onJumpEnding ? h('div', { class: 'setting' }, h('label', { html: `Review build: jump to ending<small>Development shortcut — plays ${esc(extras.stageName || 'the current stage')}’s reference strategy and ending</small>` }), h('button', { class: 'btn small', onclick: () => extras.onJumpEnding() }, 'Play ending')) : null;
+    const dev = extras.onJumpEnding ? h('div', { class: 'setting' }, h('label', { html: `Review build: jump to ending<small>Shortcut for reviewing: plays ${esc(extras.stageName || 'the current stage')}’s reference strategy and ending</small>` }), h('button', { class: 'btn small', onclick: () => extras.onJumpEnding() }, 'Play ending')) : null;
     const m = modal([h('div', { class: 'kicker', text: 'Options' }), h('h2', { text: S.menu.settings }), rows, dev, h('div', { class: 'row-actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, 'Done'))], { onClose });
     return m;
   }
@@ -186,7 +186,7 @@ export function createMenus(ui) {
           h('button', { class: 'btn', html: `${icon('info')}How to Play`, onclick: onHow }),
           h('button', { class: 'btn', html: `${icon('gear')}Settings`, onclick: onSettings }),
           h('button', { class: 'btn', html: `${icon('restart')}Restart level`, onclick: () => confirm('Restart the level?', 'Your progress in this mission will be lost and the mission resets to its starting state.', 'Restart', () => (m.close(true), onRestart())) }),
-          h('button', { class: 'btn danger', html: `${icon('home')}Back to main menu`, onclick: () => confirm('Leave to the main menu?', 'Your progress is autosaved — use Continue to come back.', 'Main menu', () => (m.close(true), onMenu())) }),
+          h('button', { class: 'btn danger', html: `${icon('home')}Back to main menu`, onclick: () => confirm('Leave to the main menu?', 'Your progress is saved automatically. Use Continue to come back.', 'Main menu', () => (m.close(true), onMenu())) }),
         ),
       ],
       { cls: 'narrow', onClose: onResume },
@@ -219,10 +219,31 @@ export function createMenus(ui) {
         h('div', { class: 'sec', html: `<h5>Why it happened</h5><p>${fill(L.why)}</p>` }),
         h('div', { class: 'sec', html: `<h5>What can I do?</h5><ul>${L.todo.map(fill).filter((t) => t.trim()).map((t) => `<li>${t}</li>`).join('')}</ul>` }),
         h('div', { class: 'sec real', html: `<h5>Real-world connection</h5><p>${fill(L.real)}</p>` }),
-        h('div', { class: 'simplified', text: 'Simplified model — real systems are more complex.' }),
+        h('div', { class: 'simplified', text: 'Simplified model. Real grids are more complicated.' }),
         h('div', { class: 'row-actions' }, vars.focus ? h('button', { class: 'btn', onclick: () => (m.close(), vars.focus()) }, 'Show me') : null, h('button', { class: 'btn primary', onclick: () => m.close() }, 'Got it')),
       ],
       { cls: 'learn', onClose },
+    );
+    return m;
+  }
+
+  // ---------------------------------------------------------------- community requests and protests
+  function choice(ch, { onPick, onLater, cast }) {
+    const who = cast || { name: 'Local residents', role: 'Community', color: '#d9a35b', initials: 'LR' };
+    const m = modal(
+      [
+        h('div', { class: `kicker ${ch.kind === 'protest' ? 'warn' : 'info'}`, text: ch.kind === 'protest' ? 'Protest' : 'Community request' }),
+        h('div', { class: 'choice-who' }, h('div', { class: 'avatar', style: { background: who.color }, text: who.initials }), h('div', { html: `<b>${esc(who.name)}</b><span>${esc(who.role)}</span>` })),
+        h('h2', { text: ch.title }),
+        h('p', { class: 'choice-text', text: ch.text }),
+        h(
+          'div',
+          { class: 'choice-opts' },
+          ch.options.map((o, i) => h('button', { class: `btn choice-opt ${i === 0 ? 'primary' : ''}`, onclick: () => (m.close(true), onPick(i)) }, h('b', { text: o.label }), o.note ? h('span', { text: o.note }) : null)),
+        ),
+        h('div', { class: 'row-actions' }, h('button', { class: 'btn ghost', onclick: () => (m.close(true), onLater?.()) }, 'Decide later')),
+      ],
+      { cls: 'learn choice', dismissable: false },
     );
     return m;
   }
@@ -238,7 +259,7 @@ export function createMenus(ui) {
         cell('Energy delivered', fmt.kwh(M.kWh)),
         cell('Average / peak', `${fmt.kw(M.avgKW)} / ${fmt.kw(M.peakKW)}`),
         cell('Outage (customer-h)', M.outageCustH.toFixed(1)),
-        cell('Restoration time', M.restoreMin != null ? fmt.dur(M.restoreMin) : '—'),
+        cell('Restoration time', M.restoreMin != null ? fmt.dur(M.restoreMin) : 'n/a'),
         cell('Network losses', `${M.lossPct.toFixed(1)}%`),
         cell('Credits earned', fmt.cr(M.earned)),
         cell('Credits spent', fmt.cr(M.spent)),
@@ -254,7 +275,7 @@ export function createMenus(ui) {
     const m = modal(
       [
         h('div', { class: 'kicker', text: `${mission?.stageName || 'Mission'} complete` }),
-        h('h2', { text: `${mission?.name || S.missionName} — ${S.endings[sc.ending]}` }),
+        h('h2', { text: `${mission?.name || S.missionName}: ${S.endings[sc.ending]}` }),
         h('div', { class: 'score', html: `<div class="total">${sc.total}<small> / 100</small></div><div class="parts">${spec.map(([k, l, mx]) => part(k, l, mx)).join('')}</div>` }),
         metricsGrid(result.metrics),
         h('div', { class: 'row-actions' }, h('button', { class: 'btn', onclick: () => (m.close(true), onMenu()) }, 'Main menu'), h('button', { class: 'btn', onclick: () => (m.close(true), onReplay()) }, 'Replay'), h('button', { class: 'btn primary', onclick: () => (m.close(true), onContinue()) }, 'Continue')),
@@ -376,5 +397,5 @@ export function createMenus(ui) {
     return m;
   }
 
-  return { modal, closeTop, closeAll, isOpen, intro, mainMenu, howTo, settings, credits, pause, confirm, learn, setLearn, victory, fail, ending, campaign, briefing };
+  return { modal, closeTop, closeAll, isOpen, intro, mainMenu, howTo, settings, credits, pause, confirm, learn, setLearn, victory, fail, ending, campaign, briefing, choice };
 }

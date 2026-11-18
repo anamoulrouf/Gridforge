@@ -19,6 +19,9 @@ import { S, fmt } from './data/strings.js';
 import { STAGES } from './missions/index.js';
 import { srcType, ratedKW, lineContributors } from './sim/power.js';
 import { windFrac } from './sim/weather.js';
+import { LABEL, inZone } from './sim/events.js';
+import { createHazards } from './render/hazards.js';
+import { createEventUI } from './ui/events-ui.js';
 
 const params = new URLSearchParams(location.search);
 const TEST = params.has('test');
@@ -87,6 +90,7 @@ const rig = createCameraRig(camera, map.bounds);
 let world = createWorld(scene, map);
 let net = createNetworkView(scene, map);
 const fx = createFx(scene);
+const hazards = createHazards(scene);
 let people = createPeople(scene, map);
 rig.setMap(map.bounds, M.camera);
 const audio = createAudio();
@@ -139,7 +143,7 @@ const hud = createHud(uiEl, labelsEl, {
   onResetCamera: () => rig.reset(),
   xfmrName: (id) => xfmrName(id),
   srcName: (id) => srcName(id),
-  onPanel: (k) => select({ kind: k }),
+  onPanel: (k) => (k === 'news' && hud.newsRead(), select({ kind: k })),
   onFocusObjective: (f) => {
     audio.play('click');
     if (f.sel) focus(f.sel);
@@ -346,7 +350,8 @@ function cmd(c, quiet = false) {
 }
 function doAction(a) {
   if (a.type === 'deselect') return select(null);
-  if (a.type === 'openPanel') return select({ kind: a.kind });
+  if (a.type === 'openPanel') return (a.kind === 'news' && hud.newsRead(), select({ kind: a.kind }));
+  if (a.type === 'openChoice') return evUI.openChoice(a.id);
   if (a.type === 'confirmRemove') return confirmRemove(a.target);
   const r = cmd(a);
   if (r.ok && a.type === 'transformer') audio.play('build');
@@ -794,6 +799,28 @@ const uiApi = {
   custOf: (id) => custOf(id),
   burst: (x, y, z, k, n) => fx.burst(x, y, z, k, n),
 };
+const evUI = createEventUI({
+  hud,
+  menus,
+  audio,
+  hazards,
+  fx,
+  rig,
+  S_: () => S_(),
+  bal: () => bal,
+  mode: () => app.mode,
+  cmd: (c, q) => cmd(c, q),
+  focus: (s) => focus(s),
+  select: (s) => select(s),
+  hold: (n) => hold(n),
+  crewBusy: (id) => crewBusy(id),
+  xfmrName: (id) => xfmrName(id),
+  srcName: (id) => srcName(id),
+  tierName: (t) => tierName(t),
+  inZone,
+  LABEL,
+  onNews: (e) => hud.news(e, S_()),
+});
 function handleEvents(evs) {
   const st = S_();
   for (const e of evs) {
@@ -801,6 +828,7 @@ function handleEvents(evs) {
       M.ui.onEvent(e, uiApi);
       continue;
     }
+    if (evUI.handle(e)) continue;
     switch (e.type) {
       case 'firstLight':
         audio.play('swell');
@@ -814,7 +842,7 @@ function handleEvents(evs) {
       case 'powerOff': {
         const shed = Object.entries(e.reasons).filter(([, r]) => r === 'shed').map(([id]) => custOf(id).name);
         const lastStart = Math.max(-999, ...Object.values(st.gens).map((g) => g.startT ?? -999));
-        if (shed.length && e.t - lastStart > (bal.generator?.rampH ?? 0.25) * 60 + 1) hud.alert({ id: 'shed', level: 'warn', title: 'Supply short — load shed', text: `${shed.slice(0, 3).join(', ')}${shed.length > 3 ? ` +${shed.length - 3}` : ''} disconnected by your policy.`, ttl: 8000 });
+        if (shed.length && e.t - lastStart > (bal.generator?.rampH ?? 0.25) * 60 + 1) hud.alert({ id: 'shed', level: 'warn', title: 'Not enough power: some customers switched off', text: `${shed.slice(0, 3).join(', ')}${shed.length > 3 ? ` +${shed.length - 3}` : ''} disconnected by your policy.`, ttl: 8000 });
         break;
       }
       case 'genStart':
@@ -837,7 +865,7 @@ function handleEvents(evs) {
       case 'xfmrOverload': {
         const n = st.nodes[e.target];
         audio.play('warn');
-        hud.alert({ id: 'ovl-' + e.target, level: 'warn', title: `${xfmrName(e.target)} overloaded — ${fmt.pct(e.pct)}`, text: `Carrying ${fmt.kw(n.loadKW)} on a ${fmt.kw(n.ratingKW)} rating. It trips in ~60 min unless its load drops.`, actions: [focusAct(e.target)] });
+        hud.alert({ id: 'ovl-' + e.target, level: 'warn', title: `${xfmrName(e.target)} is overloaded (${fmt.pct(e.pct)})`, text: `Carrying ${fmt.kw(n.loadKW)} on a ${fmt.kw(n.ratingKW)} rating. It trips in about 60 min unless its load drops.`, actions: [focusAct(e.target)] });
         learnOnce('overload', { name: xfmrName(e.target), kw: fmt.kw(n.loadKW), focus: () => focus({ kind: 'node', id: e.target }) });
         break;
       }
@@ -896,7 +924,7 @@ function handleEvents(evs) {
         const n = st.nodes[e.target];
         audio.play('warn');
         say('faultWarn', { name: xfmrName(e.target), temp: `${Math.round(Math.max(n.tempC, 88))} °C` });
-        hud.alert({ id: 'fault-' + e.target, level: 'warn', title: `${xfmrName(e.target)} overheating — failure likely`, text: 'Temperature is rising without extra load. Pre-dispatch the crew so they are on site when it fails.', actions: [{ label: 'Send crew now', primary: true, fn: () => cmd({ type: 'repair', target: e.target }).ok && hud.dismiss('fault-' + e.target) }, focusAct(e.target)] });
+        hud.alert({ id: 'fault-' + e.target, level: 'warn', title: `${xfmrName(e.target)} is overheating and likely to fail`, text: 'Temperature is rising without extra load. Pre-dispatch the crew so they are on site when it fails.', actions: [{ label: 'Send crew now', primary: true, fn: () => cmd({ type: 'repair', target: e.target }).ok && hud.dismiss('fault-' + e.target) }, focusAct(e.target)] });
         break;
       }
       case 'fault': {
@@ -906,7 +934,7 @@ function handleEvents(evs) {
         audio.play('critical');
         fx.burst(n.x, 7, n.z, 'sparks', 60);
         const pre = crewBusy(e.target);
-        hud.alert({ id: 'fault-' + e.target, level: 'critical', title: `${xfmrName(e.target)} FAULT — ${e.affected.length} customers dark`, text: `${clinic ? 'Including the clinic (6 h limit). ' : ''}${pre ? 'Your crew is already on it.' : 'Send the repair crew: 1 kit + 200 ¢.'}`, actions: [pre ? null : { label: 'Send repair crew', primary: true, fn: () => cmd({ type: 'repair', target: e.target }).ok && hud.dismiss('fault-' + e.target) }, focusAct(e.target)].filter(Boolean) });
+        hud.alert({ id: 'fault-' + e.target, level: 'critical', title: `${xfmrName(e.target)} has failed: ${e.affected.length} customers dark`, text: `${clinic ? 'Including the clinic (6 h limit). ' : ''}${pre ? 'Your crew is already on it.' : 'Send the repair crew: 1 kit + 200 ¢.'}`, actions: [pre ? null : { label: 'Send repair crew', primary: true, fn: () => cmd({ type: 'repair', target: e.target }).ok && hud.dismiss('fault-' + e.target) }, focusAct(e.target)].filter(Boolean) });
         say(clinic ? 'fault' : 'faultNoClinic', { name: xfmrName(e.target) });
         learnOnce('fault', { name: xfmrName(e.target), count: e.affected.length, clinic: clinic ? ', including the clinic' : '', focus: () => focus({ kind: 'node', id: e.target }) });
         break;
@@ -947,7 +975,7 @@ function handleEvents(evs) {
         audio.play('warn');
         const A = lineAdvice(e.target);
         const showFix = () => learnNow('congestion', { ...A, fix1: A.fixes[0], fix2: A.fixes[1], fix3: A.fixes[2], fix4: A.fixes[3], mins: e.inMin, focus: () => focus({ kind: 'edge', id: e.target }) });
-        hud.alert({ id: 'lovl-' + e.target, level: 'warn', title: `${A.tier} line overloaded: ${A.load} on a ${A.rating} line`, text: `${A.who} It switches off in ~${e.inMin} min unless the load drops.<br><b>Fix:</b> ${A.fixes[0]}`, actions: [{ label: 'How to fix', primary: true, fn: showFix }, { label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
+        hud.alert({ id: 'lovl-' + e.target, level: 'warn', title: `${A.tier} line overloaded: ${A.load} on a ${A.rating} line`, text: `${A.who} It switches off in about ${e.inMin} min unless the load drops.<br><b>Fix:</b> ${A.fixes[0]}`, actions: [{ label: 'How to fix', primary: true, fn: showFix }, { label: 'Focus', fn: () => focus({ kind: 'edge', id: e.target }) }] });
         if (!app.learnSeen.has('congestion')) {
           app.learnSeen.add('congestion');
           showFix();
@@ -974,7 +1002,7 @@ function handleEvents(evs) {
         break;
       case 'failWarn': {
         const crit = e.id ? custOf(e.id)?.name : 'The clinic';
-        const t = { fuel: ['Fuel out — mission at risk', 'Order fuel now. Without a delivery on its way the mission fails in'], clinic: [`${crit} dark — mission at risk`, `Restore power to ${crit}. The mission fails in`], bankrupt: ['Credits nearly gone', 'Without income the mission fails in'], deadline: ['Final day', 'The mission must be complete by midnight — time left:'], trust: [`Public trust collapsing (${S.clsName?.[e.cls] || e.cls})`, 'The regulator will revoke your licence in'], ...(M.ui.failWarn || {}) }[e.cause] || ['Mission at risk', 'Time left:'];
+        const t = { fuel: ['Out of fuel: mission at risk', 'Order fuel now. Without a delivery on its way the mission fails in'], clinic: [`${crit} is dark: mission at risk`, `Restore power to ${crit}. The mission fails in`], bankrupt: ['Credits nearly gone', 'Without income the mission fails in'], deadline: ['Final day', 'The mission must be done by midnight. Time left:'], trust: [`Public trust collapsing (${S.clsName?.[e.cls] || e.cls})`, 'The regulator will revoke your licence in'], ...(M.ui.failWarn || {}) }[e.cause] || ['Mission at risk', 'Time left:'];
         audio.play('critical');
         hud.alert({ id: 'fail-' + e.cause, level: 'critical', title: t[0], text: `${t[1]} ${fmt.dur(e.minutesLeft)}.`, actions: e.cause === 'fuel' ? [{ label: `Order fuel · ${bal.procurement.fuel.cost} ¢`, primary: true, fn: () => cmd({ type: 'order', item: 'fuel' }) }] : e.cause === 'clinic' ? [{ label: 'Focus', fn: () => focus({ kind: 'building', id: e.id || 'clinic' }) }] : [] });
         if (e.cause === 'clinic') say('clinicWarn', { h: Math.round((st.cust[e.id || 'clinic']?.outMin || 0) / 60) });
@@ -1356,6 +1384,7 @@ function buildStage(m) {
   if (m === M && world) return;
   for (const e of stageEmitters) fx.removeEmitter(e);
   stageEmitters.length = 0;
+  hazards.clear();
   fx.clearParticles();
   world.dispose();
   net.dispose();
@@ -1389,6 +1418,8 @@ function openSettings(fromMenu) {
 }
 
 function resetVisuals() {
+  hazards.clear();
+  evUI.reset();
   app.shown = {};
   app.pending.clear();
   for (const id of [...builtViews.keys()]) {
@@ -1397,7 +1428,7 @@ function resetVisuals() {
   }
   for (const c of map.customers) {
     world.setPower(c.id, 'off');
-    world.setActive(c.id, c.appearAt == null || app.sim?.state.cust[c.id]?.active !== false);
+    world.setActive(c.id, (c.appearAt == null && !c.surprise) || app.sim?.state.cust[c.id]?.active !== false);
   }
   world.setGroupLevel('street-n', 0);
   world.setGroupLevel('street-s', 0);
@@ -1570,11 +1601,16 @@ function startEnding(sim) {
   const ENDING = M.ui.ending;
   const lines = [...ENDING.common, ENDING[score.ending]];
   if (MET?.decisions) for (const k of Object.keys(ENDING.decisions || {})) if (MET.decisions[k] && lines.length < 5) lines.push(ENDING.decisions[k]);
+  // the town paper's verdict: the best headline of the run (and the worst, if there was one)
+  const news = sim.state.ev?.news || [];
+  const good = news.filter((n) => n.tone === 'good').pop();
+  const bad = news.filter((n) => n.tone === 'bad').pop();
+  if (good) lines.push(`The Gazette remembers: “${good.text}”${bad ? ` Not every day went well, though: “${bad.text}”` : ''}`);
   const isLast = M.n === STAGES.length;
   if (isLast) {
     // Campaign finale: look back across every region the player electrified.
     const best = campaign().best;
-    lines.push(`Your grid, region by region — ${STAGES.map((m) => `${m.region} ${best[m.key] ? best[m.key] : '—'}`).join(' · ')}.`);
+    lines.push(`Your grid, region by region: ${STAGES.map((m) => `${m.region} ${best[m.key] ? best[m.key] : 'not played'}`).join(' · ')}.`);
   }
   lines.push(ENDING.next);
   audio.setWarmth(13);
@@ -1724,11 +1760,14 @@ function frame() {
   }
   rig.smooth = !cfg.reduceMotion || app.mode !== 'game' ? true : true;
   rig.update(dt, time);
+  hazards.applyShake(camera, dt, cfg.reduceMotion);
   hud.setCompass(rig.northDeg());
 
   // --- lighting
   const tod = app.mode === 'game' ? st.clock % 1440 : app.mode === 'ending' ? 22 * 60 : 19.6 * 60;
   const { dayW } = G.setTimeOfDay(tod, app.mode === 'ending' ? 'night' : null);
+  const hz = hazards.update(st, dt, time, { custOf, target: rig.target, dist: rig.dist, reduceMotion: cfg.reduceMotion });
+  if (app.mode === 'game') hazards.weatherLight(G, hz.storm);
   const nightK = 1 - dayW * 0.7;
   app.nightK = nightK;
 
@@ -1846,6 +1885,35 @@ if (TEST) {
       for (let i = 0; i < hrs * 60 && !app.sim.state.result; i++) app.sim.tick();
     },
     startGame: () => startGame(M, null),
+    /** Test autopilot: repair faults, reset trips and inspect/service like the reference strategy. */
+    heal() {
+      const st = app.sim.state;
+      for (const id in st.nodes) {
+        const n = st.nodes[id];
+        if (n.state === 'fault' || n.overheat) app.sim.cmd({ type: 'repair', target: id });
+        if (n.state === 'trip' && st.t >= (n.coolUntil || 0)) app.sim.cmd({ type: 'reset', target: id });
+        if (n.wearKnown === undefined && n.legacy && n.kind === 'xfmr') app.sim.cmd({ type: 'inspect', target: id });
+        if (n.wearKnown && n.hiddenWear > 0 && n.state === 'ok') app.sim.cmd({ type: 'maintain', target: id });
+      }
+      for (const id in st.edges) {
+        const e = st.edges[id];
+        if (e.state === 'fault') app.sim.cmd({ type: 'repair', target: id });
+        if (e.state === 'trip' && st.t >= (e.coolUntil || 0)) app.sim.cmd({ type: 'reset', target: id });
+      }
+    },
+    /** Test hook: bring a deck event forward so its warning starts in `h` hours. */
+    eventSoon(key, h = 0.2) {
+      const st = app.sim.state;
+      const d = st.ev.deck.find((x) => x.key === key);
+      if (!d) return null;
+      const warn = d.hitAt - d.warnAt;
+      const dur = d.endAt - d.hitAt;
+      d.warnAt = st.clock + Math.round(h * 60);
+      d.hitAt = d.warnAt + warn;
+      d.endAt = d.hitAt + dur;
+      if (d.kind === 'festival') d.p = { ...d.p, startH: Math.floor((d.hitAt % 1440) / 60) };
+      return { warn: d.warnAt / 60, hit: d.hitAt / 60, end: d.endAt / 60 };
+    },
   };
 }
 

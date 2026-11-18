@@ -9,6 +9,7 @@ import { fmt } from '../data/strings.js';
 import { typeDef } from '../sim/power.js';
 import { windowAvail, windowHours } from '../sim/economy.js';
 import { runSteps } from '../sim/steps.js';
+import { drainAndRespond } from '../sim/events.js';
 
 const D = 1440;
 const day = (d, h) => (d - 1) * D + h * 60;
@@ -34,7 +35,7 @@ export const MAP3 = {
   core: [{ x: 10, z: 10, w: 240, d: 220 }, { x: 390, z: 0, w: 220, d: 300 }],
   hills: [{ x: -200, z: 150, r: 70, h: 14, squash: 0.6 }, { x: 180, z: 160, r: 60, h: 10, squash: 0.6 }],
   sources: [{ id: 'coal', type: 'coal', name: 'Ironvale coal station', tier: 'HV', x: -470, z: -100, w: 80, d: 70, port: { x: -422, z: -42 }, kw: 4000, running: true }],
-  sites: [{ id: 'peaker', name: 'Gas peaker site', desc: 'Pipeline plot beside the industrial park', x: 458, z: 150, w: 40, d: 26, tier: 'HV', port: { x: 430, z: 128 }, options: [{ type: 'gas', kw: 2000, cost: 9000, note: 'Starts in minutes; expensive (0.22 ¢/kWh) — run it only for peaks. 0.5 kg CO₂/kWh.' }] }],
+  sites: [{ id: 'peaker', name: 'Gas peaker site', desc: 'Pipeline plot beside the industrial park', x: 458, z: 150, w: 40, d: 26, tier: 'HV', port: { x: 430, z: 128 }, options: [{ type: 'gas', kw: 2000, cost: 9000, note: 'Starts in minutes but costs a lot (0.22 ¢/kWh), so run it only for peaks. 0.5 kg CO₂/kWh.' }] }],
   depot: { id: 'depot', x: 180, z: -66, w: 18, d: 12 },
   townCenterZ: 0,
   decor: [
@@ -54,6 +55,9 @@ export const MAP3 = {
     { id: 'mill', type: 'mill', name: 'Ironvale Steel', x: 315, z: -95, w: 60, d: 40, contract: 'mill', label: 'IRONVALE STEEL' },
     { id: 'factory', type: 'factory', name: 'Corridor Engineering', x: 450, z: -70, w: 40, d: 28, label: 'ENGINEERING' },
     { id: 'warehouse', type: 'warehouse', name: 'Logistics Hub', x: 450, z: 40, w: 44, d: 24, label: 'LOGISTICS' },
+    // surprise: workers' housing for the mill (appears in some runs)
+    { ...apt('w1', 'Millworkers’ Flats (new)', 45, 42), surprise: 'workers' },
+    { ...apt('w2', 'Furnace Row Flats (new)', 105, 42), surprise: 'workers' },
   ],
 };
 
@@ -129,9 +133,9 @@ const objectives = [
     eval: (st) => ({ done: !!st.contracts.mill.accepted }),
     guide: (st) => ({
       title: 'Sign the steel mill’s supply contract',
-      why: 'Ironvale Steel will only run its furnaces with a firm supply: a lower tariff (0.32 ¢/kWh) for a huge, steady load — and a penalty for every minute it’s dark.',
+      why: 'Ironvale Steel will only run its furnaces with a firm supply: a lower tariff (0.32 ¢/kWh) for a huge, steady load, and a penalty for every minute it’s dark.',
       steps: ['Click <b>Ironvale Steel</b> in the industrial park (east).', 'Read the terms: keep the mill powered 98% of the time over 48 hours, or pay 5 ¢ for every minute it’s dark.', 'Press <b>Sign contract</b>. Penalties only start once the mill first gets power, so sign early.'],
-      now: [st.contracts.mill.accepted ? ok('Signed') : todo('Not signed — the mill stays idle until you sign')],
+      now: [st.contracts.mill.accepted ? ok('Signed') : todo('Not signed. The mill stays idle until you sign')],
       focus: { x: 315, z: -95, sel: { kind: 'building', id: 'mill' } },
       focusLabel: 'Show the steel mill',
     }),
@@ -143,8 +147,8 @@ const objectives = [
     eval: (st) => ({ done: hvNear(st) }),
     guide: (st, bal) => ({
       title: 'Build a 66 kV line to the industrial park',
-      why: 'The park needs over 3 MW. An 11 kV line is rated 1.5 MW — it would overheat and trip. At 66 kV the same conductors carry 20× the power with far lower losses.',
-      steps: [`Press ${k('L')} and click the <b>coal station</b> (it outputs 66 kV).`, `Click east along the corridor — lattice towers go every ≤ ${bal.network.maxSpan.HV} m (${fmt.cr(bal.costs.pole.HV)} each + ${bal.costs.cablePerM.HV} ¢/m).`, 'Stop near the park road (x ≈ 340), on the grass beside the mill.'],
+      why: 'The park needs over 3 MW. An 11 kV line can carry only 1.5 MW. It would overheat and switch off. At 66 kV the same conductors carry 20× the power with far lower losses.',
+      steps: [`Press ${k('L')} and click the <b>coal station</b> (it outputs 66 kV).`, `Click east along the corridor. Towers go at least every ${bal.network.maxSpan.HV} m (${fmt.cr(bal.costs.pole.HV)} each + ${bal.costs.cablePerM.HV} ¢/m).`, 'Stop near the park road (x about 340), on the grass beside the mill.'],
       now: [hvNear(st) ? ok('66 kV reaches the park') : todo('Not there yet'), info(`Credits ${fmt.cr(st.credits)}`)],
       tip: 'Keep the route on the north verge of the main road to avoid buildings.',
       focus: { x: -422, z: -42, sel: { kind: 'gen', id: 'coal' } },
@@ -158,9 +162,9 @@ const objectives = [
     eval: (st) => ({ done: !!parkSub(st) && st.nodes[parkSub(st)].energized }),
     guide: (st, bal) => ({
       title: 'Build a substation at the park',
-      why: 'A substation steps 66 kV down to 11 kV for local feeders — the HV equivalent of a pole transformer, rated 5 MW.',
-      steps: [`Press ${k('B')} (Substation) and click your last 66 kV tower near the park.`, `It costs ${fmt.cr(bal.costs.substation)} — you have ${st.inv.substations} in stock.`, '11 kV lines drawn out of it feed the mill, factory and warehouse.'],
-      now: [parkSub(st) ? (st.nodes[parkSub(st)].energized ? ok('Substation energised') : warn('Built but not energised — is the 66 kV line connected to the coal station?')) : todo('Not built')],
+      why: 'A substation turns 66 kV into 11 kV for local lines. It’s like a big pole transformer, built for 5 MW.',
+      steps: [`Press ${k('B')} (Substation) and click your last 66 kV tower near the park.`, `It costs ${fmt.cr(bal.costs.substation)}. You have ${st.inv.substations} in stock.`, '11 kV lines drawn out of it feed the mill, factory and warehouse.'],
+      now: [parkSub(st) ? (st.nodes[parkSub(st)].energized ? ok('Substation is live') : warn('Built but not live. Is the 66 kV line connected to the coal station?')) : todo('Not built')],
       focus: null,
     }),
   },
@@ -172,8 +176,8 @@ const objectives = [
     eval: (st) => ({ done: INDUSTRY.every((id) => powered(st, id)), progress: [INDUSTRY.filter((id) => powered(st, id)).length, 3] }),
     guide: (st) => ({
       title: 'Power the mill, factory and warehouse',
-      why: 'Industrial customers connect directly at 11 kV — no pole transformer — to an 11 kV pole or the substation within 30 m.',
-      steps: ['Put the park substation within 30 m of the steel mill.', `Connect the mill (${k('C')}) <b>straight to the substation</b> — at 2 MW it’s more than a single 11 kV feeder’s 1.5 MW rating.`, `Draw an 11 kV feeder (${k('L')}) out of the substation to the factory and warehouse, and connect them.`],
+      why: 'Factories connect straight to 11 kV (no pole transformer), from an 11 kV pole or the substation within 30 m.',
+      steps: ['Put the park substation within 30 m of the steel mill.', `Connect the mill (${k('C')}) <b>straight to the substation</b>. At 2 MW it needs more than one 11 kV line can carry (1.5 MW).`, `Draw an 11 kV feeder (${k('L')}) out of the substation to the factory and warehouse, and connect them.`],
       now: INDUSTRY.map((id) => (powered(st, id) ? ok(`${st.map.customers.find((c) => c.id === id).name}: powered`) : todo(`${st.map.customers.find((c) => c.id === id).name}: ${st.cust[id].status}`))),
       focus: { x: 390, z: -20 },
       focusLabel: 'Show the park',
@@ -189,7 +193,7 @@ const objectives = [
     guide: (st) => ({
       title: '24 h with no overload trip after industry is on',
       why: 'Congestion: every line, transformer and substation has a rating. Overloads trip protection and black out everyone downstream.',
-      steps: ['Use the Capacity overlay (O) to spot red/amber assets.', 'Keep 11 kV feeders under 1.5 MW each — split big loads across feeders.', 'Make sure supply covers the peak (start the gas peaker if needed).'],
+      steps: ['Use the Capacity overlay (O) to spot red/amber assets.', 'Keep each 11 kV line under 1.5 MW. Split big loads across lines.', 'Make sure supply covers the peak (start the gas peaker if needed).'],
       now: [INDUSTRY.every((id) => powered(st, id)) ? info(`Clean for ${Math.floor((st.flags.cleanMin || 0) / 60)} h`) : todo('Starts once all industry is powered'), (st.stats.lineTrips || 0) + st.stats.trips ? warn(`Trips so far: ${st.stats.trips + (st.stats.lineTrips || 0)}`) : ok('No trips so far')],
       focus: null,
     }),
@@ -232,8 +236,8 @@ const objectives = [
       return {
         title: 'Optional · Inspect and service the old substation',
         why: 'Condition you can’t see is still condition. The inherited substation by the coal station has incomplete records.',
-        steps: [`Click <b>${ctx.xfmrName(id)}</b> near the coal station and press <b>Inspect</b>.`, `If wear is found, press <b>Service</b> (${fmt.cr(bal.costs.maintain)}) — ideally overnight, when the town’s load is low.`],
-        now: [!n ? info('Removed') : n.wearKnown ? (n.hiddenWear ? warn('Hidden wear found — service it') : ok('Serviced')) : todo('Not inspected')],
+        steps: [`Click <b>${ctx.xfmrName(id)}</b> near the coal station and press <b>Inspect</b>.`, `If wear is found, press <b>Service</b> (${fmt.cr(bal.costs.maintain)}). Overnight is best, when the town uses less.`],
+        now: [!n ? info('Removed') : n.wearKnown ? (n.hiddenWear ? warn('Hidden wear found. Service it') : ok('Serviced')) : todo('Not inspected')],
         focus: n ? { x: n.x, z: n.z, sel: { kind: 'node', id } } : null,
         focusLabel: n ? `Show ${ctx.xfmrName(id)}` : null,
       };
@@ -246,7 +250,7 @@ const objectives = [
     eval: (st) => ({ done: !!st.gens.peaker }),
     guide: (st) => ({
       title: 'Optional · Build the gas peaker',
-      why: 'Coal is cheap but slow and can’t go below 40 %. A fast gas peaker covers peaks and outages — at a higher price per kWh.',
+      why: 'Coal is cheap but slow and can’t go below 40 %. A fast gas peaker covers peaks and outages, but each kWh costs more.',
       steps: [`Press ${k('G')} and click the peaker plot (north-east of the park).`, 'Connect it with a 66 kV line to the park substation’s tower line.', 'Start it, and keep it below coal in the dispatch order (Supply panel).'],
       now: [st.gens.peaker ? ok(`Built · ${st.gens.peaker.status}`) : todo('Not built')],
       focus: { x: 458, z: 150, sel: { kind: 'site', id: 'peaker' } },
@@ -342,10 +346,10 @@ function metrics(state) {
   const lossPct = s.kWhGen > 0 ? (s.kWhLoss / s.kWhGen) * 100 : 0;
   return {
     powered: state.flow.powered,
-    total: state.map.customers.length,
+    total: state.flow.activeCount ?? state.map.customers.length,
     decisions: { hv: true, inspected: !!state.nodes[S0(state)]?.wearKnown, expanded: state.flags.expansion === 'accepted', peaker: !!state.gens.peaker },
     cells: [
-      ['Customers powered', `${state.flow.powered} / ${state.map.customers.length}`],
+      ['Customers powered', `${state.flow.powered} / ${state.flow.activeCount ?? state.map.customers.length}`],
       ['Energy delivered', fmt.kwh(s.kWhDelivered)],
       ['Peak demand', fmt.kw(s.peakKW)],
       ['Contract availability (best 48 h)', ct.accepted ? `${bestAvail(ct).toFixed(1)}%` : 'Not signed'],
@@ -361,25 +365,25 @@ function metrics(state) {
 // ------------------------------------------------------------------ narrative
 const LEARN3 = {
   hv: { title: 'Why high voltage?', what: 'You’re moving megawatts over almost a kilometre.', why: 'Power = voltage × current. At 66 kV the same power needs one-sixth of the current of 11 kV, and line losses fall with the square of current.', todo: ['Use 66 kV for bulk power over distance.', 'Step down at a substation near the load.', 'Keep 11 kV feeders short and under 1.5 MW.'], real: 'Transmission grids run at 66–765 kV for exactly this reason.' },
-  contract: { title: 'Industrial supply contract', what: 'You signed a firm supply contract with Ironvale Steel.', why: 'Big customers pay less per kWh but buy enormous volumes — and outages cost them dearly, so the contract has penalties.', todo: ['Keep the mill’s path inside its ratings.', 'Keep backup supply ready (gas peaker).', 'Plan maintenance away from the mill’s supply path.'], real: 'Industrial contracts often include interruption clauses, demand charges and availability guarantees.' },
-  coal: { title: 'Inflexible coal', what: 'The coal unit can’t run below 40 % of its rating.', why: 'Big thermal plants need minimum steam flow. When demand is lower, the extra energy is wasted — but still burns coal.', todo: ['Connect more demand (industry) to use the minimum output.', 'Use the fast gas peaker for peaks instead of over-sizing coal.'], real: 'Inflexible baseload is one reason grids add flexible gas, hydro and storage.' },
-  inspection: { title: 'Hidden wear', what: 'The inherited substation’s records are incomplete.', why: 'Not all wear is visible from its readings. Inspections find insulation and contact problems before they fail.', todo: ['Inspect it (free).', 'Service it if wear is found — preferably overnight.'], real: 'Condition-based maintenance uses inspections and sensors to fix assets just before they would fail.' },
-  expansion: { title: 'The mill wants to expand', what: 'Ironvale Steel asks to add a second furnace (+1 MW).', why: 'More load means more revenue — but also more stress on your substation, lines and supply.', todo: ['Check the substation’s headroom (5 MW).', 'Make sure supply covers the new peak (gas peaker).', 'Accept only if you can keep 99 % availability.'], real: 'Utilities run connection studies before approving large new loads.' },
+  contract: { title: 'Industrial supply contract', what: 'You signed a firm supply contract with Ironvale Steel.', why: 'Big customers pay less per kWh but buy huge amounts. Outages cost them dearly, so the contract has penalties.', todo: ['Keep the mill’s supply within its limits.', 'Keep backup supply ready (gas peaker).', 'Plan maintenance away from the mill’s supply path.'], real: 'Industrial contracts often include interruption clauses, demand charges and availability guarantees.' },
+  coal: { title: 'Inflexible coal', what: 'The coal unit can’t run below 40 % of its rating.', why: 'Big thermal plants need minimum steam flow. When demand is lower, the extra energy is wasted, but it still burns coal.', todo: ['Connect more demand (industry) to use the minimum output.', 'Use the fast gas peaker for peaks instead of over-sizing coal.'], real: 'Inflexible baseload is one reason grids add flexible gas, hydro and storage.' },
+  inspection: { title: 'Hidden wear', what: 'The inherited substation’s records are incomplete.', why: 'Not all wear is visible from its readings. Inspections find insulation and contact problems before they fail.', todo: ['Inspect it (free).', 'Service it if wear is found, ideally overnight.'], real: 'Condition-based maintenance uses inspections and sensors to fix assets just before they would fail.' },
+  expansion: { title: 'The mill wants to expand', what: 'Ironvale Steel asks to add a second furnace (+1 MW).', why: 'More load means more income, but also more strain on your substation, lines and supply.', todo: ['Check the substation has room to spare (it’s built for 5 MW).', 'Make sure supply covers the new peak (gas peaker).', 'Accept only if you can keep 99 % availability.'], real: 'Utilities run connection studies before approving large new loads.' },
 };
 
 const LINES3 = {
   ...L1,
-  intro: [['advisor', 'Ironvale runs on coal and steel. The steel mill wants a firm supply — 2 MW, around the clock.'], ['sofia', 'The town is fed over 11 kV from the coal station. That won’t carry megawatts to the park. We need 66 kV.']],
-  contract: [['daniel', 'Contract signed. Big volume, small margin per kWh — and a penalty for every minute the mill is dark.']],
+  intro: [['advisor', 'Ironvale runs on coal and steel. The steel mill wants a guaranteed supply: 2 MW, day and night.'], ['sofia', 'The town is fed over 11 kV from the coal station. That won’t carry megawatts to the park. We need 66 kV.']],
+  contract: [['daniel', 'Contract signed. Lots of power at a small profit per kWh, and a penalty for every minute the mill is dark.']],
   records: [['sofia', 'The records for the old substation by the coal station are incomplete. Worth an inspection.']],
   inspectedWear: [['sofia', 'Inspection found hidden wear in {name}. Service it before it fails.']],
-  expansion: [['daniel', 'The mill wants a second furnace — another megawatt. Your call.']],
+  expansion: [['daniel', 'The mill wants a second furnace: another megawatt. Your call.']],
   tutorialDone: [['advisor', 'You’ve got the corridor in hand. Keep the mill running.']],
 };
 
 const TUT3 = [
   { id: 'contract', title: 'Meet your biggest customer', body: 'Click Ironvale Steel in the industrial park (east) and sign its supply contract.', target: { world: 'cust', id: 'mill' }, done: (st) => !!st.contracts.mill.accepted },
-  { id: 'hv', title: 'Go high voltage', body: 'Press L, click the coal station (66 kV) and click east along the main road — towers are placed every ≤ 120 m. Stop beside the park.', target: { world: 'gen', id: 'coal', label: 'Coal station — 66 kV' }, done: (st) => hvNear(st) },
+  { id: 'hv', title: 'Go high voltage', body: 'Press L, click the coal station (66 kV) and click east along the main road. Towers go at least every 120 m. Stop beside the park.', target: { world: 'gen', id: 'coal', label: 'Coal station: 66 kV' }, done: (st) => hvNear(st) },
   { id: 'sub', title: 'Step it down', body: 'Press B (Substation) and click your last tower near the park. It converts 66 kV to 11 kV.', target: { world: 'marker', x: 340, z: -30, label: 'Substation here' }, done: (st) => !!parkSub(st) },
   { id: 'feed', title: 'Feed the plants', body: 'Draw 11 kV feeders out of the substation (L), then press C and click the mill, factory and warehouse.', target: { world: 'cust', id: 'factory' }, done: (st) => INDUSTRY.every((id) => powered(st, id)) },
   { id: 'mix', title: 'Dispatch', body: 'Click the Supply chip: coal runs first (cheap, inflexible); a gas peaker can cover peaks.', target: { ui: '#chip-mix' }, done: (st) => !!st.inspected.mix },
@@ -388,10 +392,10 @@ const TUT3 = [
 const ENDING3 = {
   common: ['Ironvale’s furnaces never went cold.', 'Sixty-six thousand volts now hum along the corridor, carrying megawatts with hardly a loss.'],
   sustainable: 'Industry, town and utility all came out ahead: reliable power, a contract kept, a corridor ready to grow.',
-  reliable: 'The mill got its power and the town kept its lights — a solid industrial grid.',
+  reliable: 'The mill got its power and the town kept its lights. A solid industrial grid.',
   hardwon: 'There were trips and penalties along the way, but Ironvale is wired for industry now.',
-  decisions: { inspected: 'You found the old substation’s hidden wear before it failed.', expanded: 'You said yes to the mill’s second furnace — and delivered.', peaker: 'A fast gas peaker covered the peaks the coal unit couldn’t.' },
-  next: 'Next: the Saltmarsh coast — the coal station is retiring. Wind, sun, water and storage must take over.',
+  decisions: { inspected: 'You found the old substation’s hidden wear before it failed.', expanded: 'You said yes to the mill’s second furnace, and delivered.', peaker: 'A fast gas peaker covered the peaks the coal unit couldn’t.' },
+  next: 'Next: the Saltmarsh coast. The coal station is closing, and wind, sun, water and batteries must take over.',
 };
 
 const ui = {
@@ -402,13 +406,13 @@ const ui = {
   endTitle: 'Ironvale is wired for industry',
   demandNote: 'Apartments peak in the evening; offices and shops by day; the hospital never stops. The steel mill runs around the clock once its contract is signed; the factory runs two shifts.',
   briefing: {
-    text: 'The Ironvale corridor: a coal station in the west, a town in the middle and an industrial park in the east that needs <b>over 3 MW</b>. 11 kV lines can’t carry that — it’s time for <b>66 kV transmission</b>.',
+    text: 'The Ironvale corridor: a coal station in the west, a town in the middle and an industrial park in the east that needs <b>over 3 MW</b>. 11 kV lines can’t carry that. It’s time for <b>66 kV transmission</b>.',
     goals: ['Sign the steel mill’s supply contract', 'Build a 66 kV line and a substation at the park', 'Power the mill, factory and warehouse', '24 h without an overload trip, and the mill powered 98% of the time over 48 hours'],
     newSystems: ['<b>High-voltage transmission</b> (66 kV lattice towers) and <b>substations</b>', '<b>Large industrial loads</b> connected at 11 kV', '<b>Congestion</b>: lines trip when overloaded', '<b>Contracts</b> with penalties · coal vs gas <b>dispatch</b> · <b>inspections</b>'],
   },
   failCause: {
     clinic: { title: 'The hospital lost power too long', body: 'Ironvale Hospital was without power for 6 hours.', tip: 'Keep a backup path or spare capacity for critical services, and repair faults fast.' },
-    bankrupt: { title: 'Out of money', body: 'Debts passed the bank’s limit.', tip: 'Sign the mill’s contract early — it’s your biggest revenue — and avoid paying penalties.' },
+    bankrupt: { title: 'Out of money', body: 'Debts passed the bank’s limit.', tip: 'Sign the mill’s contract early (it’s your biggest income) and avoid penalties.' },
   },
   handles: ['recordsWarning', 'expansionOffer', 'contract', 'inspected', 'cleanReset'],
   onEvent(e, u) {
@@ -422,7 +426,7 @@ const ui = {
         if (e.wear > 0) {
           u.audio.play('warn');
           u.say('inspectedWear', { name: u.xfmrName(e.target) });
-          u.hud.alert({ id: 'wear', level: 'warn', title: `Hidden wear found in ${u.xfmrName(e.target)}`, text: 'Service it before it fails (crew ~1 h; its customers are off during the work).', actions: [{ label: 'Service', primary: true, fn: () => u.cmd({ type: 'maintain', target: e.target }) && u.hud.dismiss('wear') }, u.focusAct(e.target)] });
+          u.hud.alert({ id: 'wear', level: 'warn', title: `Hidden wear found in ${u.xfmrName(e.target)}`, text: 'Service it before it fails (crew about 1 h; its customers are off during the work).', actions: [{ label: 'Service', primary: true, fn: () => u.cmd({ type: 'maintain', target: e.target }) && u.hud.dismiss('wear') }, u.focusAct(e.target)] });
         }
         break;
       case 'expansionOffer':
@@ -432,7 +436,7 @@ const ui = {
           id: 'expand',
           level: 'info',
           title: 'Ironvale Steel asks for +1 MW from 12:00',
-          text: 'More revenue — and more load on your substation, feeders and supply. Decide before noon.',
+          text: 'More income, but more load on your substation, lines and supply. Decide before noon.',
           actions: [
             { label: 'Accept', primary: true, fn: () => u.cmd({ type: 'expand', accept: true }).ok && u.hud.dismiss('expand') },
             { label: 'Decline', fn: () => u.cmd({ type: 'expand', accept: false }).ok && u.hud.dismiss('expand') },
@@ -448,7 +452,7 @@ const ui = {
         }
         break;
       case 'cleanReset':
-        u.hud.alert({ id: 'clean', level: 'warn', title: 'Trip — the 24 h clean-running clock restarted', ttl: 7000 });
+        u.hud.alert({ id: 'clean', level: 'warn', title: 'Something tripped, so the 24 h clock starts again', ttl: 7000 });
         break;
     }
   },
@@ -499,8 +503,21 @@ export default {
   tools: ['select', 'line', 'xfmr', 'sub', 'drop', 'build', 'remove'],
   chips: ['credits', 'cash', 'demand', 'mix', 'powered', 'co2', 'rel', 'loss'],
   objectives,
-  contracts: CONTRACTS,
   weather: {},
+  events: {
+    count: [3, 4],
+    avoidH: [[30, 41]], // mill expansion offer and the hidden substation fault (day 2)
+    pool: [
+      { key: 'quake', kind: 'quake', weight: 2, windowH: [44, 130], params: { zone: { x: -60, z: -30, r: 320 }, p: 0.35, max: 3 } },
+      { key: 'coalTrip', kind: 'blackout', weight: 2, windowH: [44, 130], warnH: 2, durH: 3 },
+      { key: 'xfmr', kind: 'xfmrFail', weight: 1, windowH: [44, 130], warnH: 3 },
+      { key: 'workers', kind: 'arrivals', weight: 2, windowH: [44, 110], warnH: 8, durH: 12, params: { group: 'workers', at: { x: 75, z: 42 }, title: 'Housing for the mill workers', text: 'Two blocks of flats for Ironvale Steel’s workers are finishing across the main road from the shops.', say: 'The mill’s new workers move in soon. Two whole blocks of flats need power.', goodNews: 'Mill workers move into new flats with the lights already on.', badNews: 'New mill workers’ flats still dark a day after opening.' } },
+      { key: 'cup', kind: 'festival', weight: 1, windowH: [44, 130], atHour: 18, warnH: 18, durH: 4, params: { name: 'The cup final', text: 'Ironvale United are in the cup final and the whole town will be watching at home.', ids: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'], mult: 1.3, startH: 18, at: { x: -40, z: 0 }, say: 'Cup final tonight! Every TV in town will be on. Please keep the flats lit.', goodNews: 'Ironvale watches the cup final without a flicker.', badNews: 'Power cut during the cup final. Fans are furious.' } },
+      { key: 'hospital', kind: 'request', weight: 1, windowH: [44, 130], params: { who: 'maya', title: 'The hospital wants a backup generator', text: 'Ironvale Hospital asks you to help pay for a backup generator, so the operating theatres never go dark, even in a disaster.', options: [{ label: 'Pay for it · 2,000 ¢', cost: 2000, yes: true, rep: 6, trust: 5, cls: ['public'], note: 'A real comfort for patients and staff.', news: 'Utility funds backup power for Ironvale Hospital.' }, { label: 'Not this year', rep: -3, note: 'You keep the money. The hospital is disappointed.' }] } },
+    ],
+    protests: { hvNearHomes: 25, compensation: 1500, outages: 4, credit: 1200 },
+  },
+  contracts: CONTRACTS,
   demandMod,
   prebuilt: PREBUILT,
   init(state) {
@@ -538,7 +555,7 @@ export default {
     sim.cmd({ type: 'startGen', target: 'peaker' });
     for (let i = 0; i < 6 * D && !sim.state.result; i++) {
       sim.tick();
-      for (const e of sim.drainEvents()) {
+      for (const e of drainAndRespond(sim)) {
         if (e.type === 'recordsWarning') sim.cmd({ type: 'inspect', target: e.target });
         if (e.type === 'inspected' && e.wear > 0) sim.cmd({ type: 'maintain', target: e.target });
         if (e.type === 'expansionOffer') sim.cmd({ type: 'expand', accept: true });

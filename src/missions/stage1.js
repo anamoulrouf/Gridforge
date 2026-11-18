@@ -6,6 +6,7 @@ import { S } from '../data/strings.js';
 import { LINES, TUTORIAL, ENDING } from '../data/dialogue.js';
 import { OBJECTIVES, evalObjective, computeScore, computeMetrics } from '../sim/mission.js';
 import { objectiveGuide } from '../ui/guide.js';
+import { drainAndRespond } from '../sim/events.js';
 
 const POWERED = new Set(['on', 'partial']);
 
@@ -74,6 +75,17 @@ export default {
   chips: ['credits', 'demand', 'gen', 'fuel', 'powered', 'rel', 'loss'],
   objectives,
   weather: {},
+  // Run events (one or two per playthrough, gentle: this is the first lesson)
+  events: {
+    count: [1, 2],
+    avoidH: [[41, 47]], // the scripted transformer fault on day 2 evening
+    pool: [
+      { key: 'lane', kind: 'arrivals', weight: 2, windowH: [24, 38], warnH: 6, durH: 12, params: { group: 'lane', at: { x: 92, z: -28 }, title: 'Three new families are moving in', text: 'New homes are going up on the east lane, past the Mbeki home.', say: 'Three families are moving onto the east lane. Can we have their lights on from the first night?', goodNews: 'Welcome home! New families on the east lane get power on day one.', badNews: 'New families on the east lane still waiting for power.' } },
+      { key: 'wedding', kind: 'festival', weight: 2, windowH: [60, 90], atHour: 18, warnH: 20, durH: 5, params: { name: 'The Adeyemi wedding', text: 'The Adeyemi family is holding the wedding party at the Town Market.', ids: ['market', 'h9', 'h10'], mult: 1.3, startH: 18, at: { x: 60, z: 30 }, say: 'The whole town is invited to the Adeyemi wedding at the market. Lights and music all evening!', goodNews: 'Wedding at the market dances until midnight under bright lights.', badNews: 'Power cut leaves wedding guests in the dark.' } },
+      { key: 'xfmr', kind: 'xfmrFail', weight: 1, windowH: [52, 76], warnH: 3 },
+    ],
+    protests: { outages: 4, credit: 300 },
+  },
   director(state, api) {
     const r = faultDirector(state);
     if (r?.emit) api.emit(...r.emit);
@@ -87,7 +99,8 @@ export default {
       if (!scripted) state.stats.clinicOutMinNonFault++;
     }
     // stability window after the fault is repaired
-    const allOn = api.map.customers.every((c) => state.cust[c.id].status === 'on');
+    // new arrivals only count once you've connected them
+    const allOn = api.map.customers.every((c) => state.cust[c.id].status === 'on' || (c.surprise && !state.cust[c.id].dropped));
     if (state.fault.phase === 'repaired' && allOn) state.stableMin++;
     else if (state.fault.phase === 'repaired') {
       if (state.stableMin > 0) api.emit('stableReset');
@@ -110,7 +123,7 @@ export default {
     for (let i = 0; i < 5 * 1440 && !sim.state.result; i++) {
       sim.tick();
       if (sim.state.gen.fuel < 40 && !sim.state.orders.length) sim.cmd({ type: 'order', item: 'fuel' });
-      for (const e of sim.drainEvents()) if (e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
+      for (const e of drainAndRespond(sim)) if (e.type === 'fault') sim.cmd({ type: 'repair', target: e.target });
     }
   },
   score: (state) => computeScore(state),

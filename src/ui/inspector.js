@@ -2,6 +2,7 @@
 // and a plain-language "why" for anything that isn't working (§2 legibility before complexity).
 // Also hosts the operations panels used from Stage 2 on: finance & tariffs, trust, supply mix.
 import { windowAvail, windowHours } from '../sim/economy.js';
+import { inZone, LABEL } from '../sim/events.js';
 import { h, icon, esc } from './dom.js';
 import { S, fmt } from '../data/strings.js';
 import { demandAt, typeDef, srcType, ratedKW } from '../sim/power.js';
@@ -36,7 +37,7 @@ export function createInspector(ui, cb) {
   const policySeg = (state) =>
     sec('If supply runs short') +
     `<div class="seg" role="radiogroup" aria-label="Load-shed policy"><button role="radio" aria-checked="${state.policy === 'critical'}" class="${state.policy === 'critical' ? 'on' : ''}" data-act='{"type":"policy","value":"critical"}'>Protect critical</button><button role="radio" aria-checked="${state.policy === 'equal'}" class="${state.policy === 'equal' ? 'on' : ''}" data-act='{"type":"policy","value":"equal"}'>Equal reduction</button></div>` +
-    `<div class="note">${state.policy === 'critical' ? 'Critical services first (clinic, water, hospital), then public, then others.' : 'Everyone gets a reduced share — lights dim and flicker everywhere.'}</div>`;
+    `<div class="note">${state.policy === 'critical' ? 'Critical services first (clinic, water, hospital), then public, then others.' : 'Everyone gets a smaller share, so lights dim and flicker everywhere.'}</div>`;
 
   function render(sel, state, ctx) {
     if (!sel) {
@@ -95,6 +96,8 @@ export function createInspector(ui, cb) {
     if (sel.kind === 'site') return sitePanel(sel.id, state, ctx);
     if (sel.kind === 'finance') return financePanel(state, ctx);
     if (sel.kind === 'trust') return trustPanel(state, ctx);
+    if (sel.kind === 'news') return newsPanel(state);
+    if (sel.kind === 'community') return communityPanel(state, ctx);
     if (sel.kind === 'mix') return mixPanel(state, ctx);
     if (sel.kind === 'programs') return M.ui.programsPanel?.(state, ctx, { btn, kv, head, sec, pill, meter }) || '';
 
@@ -126,7 +129,7 @@ export function createInspector(ui, cb) {
       if (cs.status === 'xfmrDown' && (cs.xfmr || cs.sub)) {
         const xid = state.nodes[cs.xfmr]?.state !== 'ok' ? cs.xfmr : cs.sub;
         const n = state.nodes[xid];
-        if (n) why = `${n.ratio === 'HV/MV' ? 'Substation' : 'Transformer'} <b>${ctx.xfmrName(xid)}</b> is ${n.state === 'fault' ? 'FAULTED — send the repair crew' : n.state === 'trip' ? 'tripped on overload — reduce its load, then Reset' : 'under maintenance'}.`;
+        if (n) why = `${n.ratio === 'HV/MV' ? 'Substation' : 'Transformer'} <b>${ctx.xfmrName(xid)}</b> is ${n.state === 'fault' ? 'broken. Send the repair crew' : n.state === 'trip' ? 'switched off by overload. Reduce its load, then press Reset' : 'under maintenance'}.`;
       }
       const reach = !cs.dropped ? lvNodesInReach(state, bal, c.id) : [];
       const dropPlan = !cs.dropped ? planDrop(state, bal, c.id) : null;
@@ -146,7 +149,7 @@ export function createInspector(ui, cb) {
           ['Energy today', fmt.kwh(cs.kWhToday)],
           ['Tariff', `${tariff.toFixed(2)} ¢/kWh${bal.tariffs ? ` · ${S.clsName[classOf(bal, c.type)] || ''}` : ''}`],
           ['Bill today', fmt.cr(cs.kWhToday * tariff)],
-          ['Fed by', cs.xfmr ? ctx.xfmrName(cs.xfmr) : cs.sub ? ctx.xfmrName(cs.sub) : '—'],
+          ['Fed by', cs.xfmr ? ctx.xfmrName(cs.xfmr) : cs.sub ? ctx.xfmrName(cs.sub) : 'Nothing yet'],
           ['Priority', T.critical ? '<span style="color:var(--amber)">Critical</span>' : (T.priority ?? 1) >= 2 ? 'Public / high' : 'Standard'],
           ct ? ['Contract', ct.accepted ? (state.cust[sel.id]?.everPowered ? `Signed · last ${windowHours(ct) || '<1'} h at ${windowAvail(ct).toFixed(1)}%` : 'Signed · clock starts at first power') : 'Not signed'] : null,
         ]) +
@@ -166,10 +169,11 @@ export function createInspector(ui, cb) {
         const rating = n.ratingKW || (sub ? bal.substation.ratingKW : bal.transformer.ratingKW);
         const pct = n.loadPct || 0;
         let st;
-        if (n.state === 'fault') st = ['st-bad', 'FAULT — needs repair', 'alert'];
+        if (n.state === 'isolated') st = ['st-off', 'Switched off (protected)', 'plug'];
+        else if (n.state === 'fault') st = ['st-bad', 'Broken: needs repair', 'alert'];
         else if (n.state === 'trip') st = ['st-bad', 'Tripped (overload)', 'alert'];
         else if (n.state === 'maint') st = ['st-info', 'Under maintenance', 'wrench'];
-        else if (n.overheat) st = ['st-warn', 'Overheating — failing', 'thermo'];
+        else if (n.overheat) st = ['st-warn', 'Overheating and failing', 'thermo'];
         else if (n.overMin > 0) st = ['st-warn', `Overloaded · trips in ${60 - n.overMin} min`, 'warn'];
         else if (pct >= 85) st = ['st-warn', 'Heavily loaded', 'warn'];
         else if (!n.connected) st = ['st-off', `No ${tn(sub ? 'HV' : 'MV')} supply`, 'plug'];
@@ -178,10 +182,14 @@ export function createInspector(ui, cb) {
         const job = ctx.crewJob(n.id);
         const fc = n.forecastPeakKW || 0;
         let why = '';
-        if (n.state === 'fault') why = `<div class="why"><b>Failed internally.</b>Its ${n.customers.length} customers are dark until the crew repairs it (1 kit + ${bal.costs.repairLabour} ¢, ~${bal.crew.repairH} h on site).</div>`;
+        const floodAhead = (state.ev?.deck || []).find((d) => (d.kind === 'flood' || d.kind === 'tsunami') && (d.phase === 'warned' || d.phase === 'active') && inZone(n, d.p.zone));
+        if (n.state === 'isolated') why = `<div class="why"><b>You switched it off to protect it.</b>${floodAhead?.phase === 'active' ? 'Wait for the water to go down, then switch it back on.' : 'Its customers are dark until you switch it back on.'}</div>`;
+        else if (n.hum && n.state === 'ok') why = `<div class="why"><b>It’s humming and running hot.</b>It’s wearing out and could fail soon. Send the crew to service it now (about ${bal.crew.maintainH} h).</div>`;
+        else if (floodAhead && n.state === 'ok') why = `<div class="why ${n.protect ? 'ok' : ''}"><b>${floodAhead.kind === 'tsunami' ? 'Tsunami' : 'Flood'} on the way.</b>${n.protect ? 'Protected: the crew will switch it off as the water arrives and back on afterwards.' : 'If it’s still live when the water arrives, it will be wrecked. Protect it and the crew will switch it off just in time.'}</div>`;
+        else if (n.state === 'fault') why = `<div class="why"><b>Failed internally.</b>Its ${n.customers.length} customers are dark until the crew repairs it (1 kit + ${bal.costs.repairLabour} ¢, about ${bal.crew.repairH} h on site).</div>`;
         else if (n.state === 'trip') why = `<div class="why"><b>Protection tripped it.</b>It carried more than ${fmt.kw(rating)} for too long. ${cool > 0 ? `Cooling: ${cool} min.` : 'Reduce its load, then Reset.'}</div>`;
-        else if (n.overheat) why = `<div class="why"><b>${Math.round(n.tempC)} °C — not explained by load.</b>Something inside is failing. Send the crew now so they’re on site when it goes.</div>`;
-        else if (n.wearKnown && n.hiddenWear > 0) why = `<div class="why"><b>Inspection found hidden wear (${Math.round(n.hiddenWear)}%).</b>Service it before it fails — the crew takes about ${bal.crew.maintainH} h.</div>`;
+        else if (n.overheat) why = `<div class="why"><b>${Math.round(n.tempC)} °C, and it’s not the load.</b>Something inside is failing. Send the crew now so they’re on site when it goes.</div>`;
+        else if (n.wearKnown && n.hiddenWear > 0) why = `<div class="why"><b>Inspection found hidden wear (${Math.round(n.hiddenWear)}%).</b>Service it before it fails. The crew takes about ${bal.crew.maintainH} h.</div>`;
         else if (fc > rating) why = `<div class="why"><b>Forecast peak ${fmt.kw(fc)} at ${n.forecastPeakHour}:00 &gt; ${fmt.kw(rating)} rating.</b>${bal.upgrades?.xfmr100 && !sub && !n.upgraded ? 'Upgrade it, or move' : 'Move'} some customers to another ${sub ? 'substation' : 'transformer'} before the peak.</div>`;
         else if (!n.connected) why = `<div class="why"><b>Not connected to ${tn(sub ? 'HV' : 'MV')}.</b>Run a ${tn(sub ? 'HV' : 'MV')} line from the supply to it.</div>`;
         const up = bal.upgrades?.xfmr100;
@@ -201,10 +209,13 @@ export function createInspector(ui, cb) {
           condMeter(n.condition) +
           `<div class="actions">` +
           (n.state === 'trip' ? btn(cool > 0 ? `Reset (cooling ${cool} min)` : 'Reset', { type: 'reset', target: n.id }, { primary: cool <= 0, disabled: cool > 0, icon: 'restart' }) : '') +
+          (n.state === 'isolated' ? btn('Switch back on', { type: 'isolate', target: n.id, on: true }, { primary: floodAhead?.phase !== 'active', disabled: floodAhead?.phase === 'active', icon: 'bolt' }) : '') +
+          (n.state === 'ok' && floodAhead?.phase === 'warned' ? btn(n.protect ? 'Protected ✓ (tap to cancel)' : 'Protect from the flood', { type: 'protect', target: n.id, off: !!n.protect }, { primary: !n.protect, icon: 'shield', title: 'The crew switches it off as the water arrives and back on after.' }) : '') +
+          (n.state === 'ok' && state.ev ? btn('Switch off now', { type: 'isolate', target: n.id }, { icon: 'plug', title: 'Disconnect it straight away. Its customers lose power until you switch it back on.' }) : '') +
           (n.state === 'fault' || n.overheat ? btn(`Send repair crew · ${bal.costs.repairLabour} ¢ + kit`, { type: 'repair', target: n.id }, { primary: true, icon: 'truck', disabled: !!job || state.inv.kits < 1 || state.credits < bal.costs.repairLabour, title: state.inv.kits < 1 ? S.reasons.noKits : '' }) : '') +
-          (up && !sub && !n.upgraded && n.state !== 'fault' ? btn(`Upgrade to ${fmt.kw(up.ratingKW)} · ${up.cost} ¢`, { type: 'upgrade', target: n.id, kind: 'xfmr100' }, { icon: 'xfmr', disabled: state.credits < up.cost, title: 'Swap in a larger transformer — no outage (simplified).' }) : '') +
-          (n.hiddenWear != null && !n.wearKnown ? btn('Inspect', { type: 'inspect', target: n.id }, { icon: 'eye', title: 'Send an inspector — reveals hidden wear (free, instant in this model).' }) : '') +
-          (n.state === 'ok' && !n.overheat ? btn(`Service · ${bal.costs.maintain} ¢`, { type: 'maintain', target: n.id }, { icon: 'wrench', disabled: !!job || state.credits < bal.costs.maintain, title: 'Restores condition to 100%. Its customers lose power for ~1 h while the crew works.' }) : '') +
+          (up && !sub && !n.upgraded && n.state !== 'fault' ? btn(`Upgrade to ${fmt.kw(up.ratingKW)} · ${up.cost} ¢`, { type: 'upgrade', target: n.id, kind: 'xfmr100' }, { icon: 'xfmr', disabled: state.credits < up.cost, title: 'Swap in a bigger transformer. No power cut needed (simplified).' }) : '') +
+          (n.hiddenWear != null && !n.wearKnown ? btn('Inspect', { type: 'inspect', target: n.id }, { icon: 'eye', title: 'Send an inspector to look for hidden wear (free and instant in this game).' }) : '') +
+          (n.state === 'ok' && !n.overheat ? btn(`Service · ${bal.costs.maintain} ¢`, { type: 'maintain', target: n.id }, { icon: 'wrench', disabled: !!job || state.credits < bal.costs.maintain, title: 'Restores condition to 100%. Its customers lose power for about 1 h while the crew works.' }) : '') +
           (!sub ? btn('Connect buildings in reach', { type: 'dropAll', node: n.id }, { icon: 'plug' }) : '') +
           btn('Remove', { type: 'confirmRemove', target: n.id }, { danger: true, icon: 'trash' }) +
           `</div>`
@@ -220,11 +231,11 @@ export function createInspector(ui, cb) {
             if (e.kind === 'line') thru = Math.max(thru, e.loadKW);
           }
         }
-        const tierDesc = { HV: 'High voltage (HV) transmission — bulk power over distance', MV: 'Medium voltage (MV) distribution', LV: 'Low voltage (LV) — feeds buildings' }[n.tier];
+        const tierDesc = { HV: 'High voltage (66 kV): carries lots of power a long way', MV: 'Medium voltage (MV) distribution', LV: 'Low voltage (400 V): feeds buildings' }[n.tier];
         const mount = n.tier === 'HV' ? (M.tools.includes('sub') ? btn(`Build substation · ${bal.costs.substation} ¢`, { type: 'substation', at: n.id }, { primary: true, icon: 'sub', disabled: state.inv.substations < 1 || state.credits < bal.costs.substation }) : '') : n.tier === 'MV' ? btn(`Mount transformer · ${bal.costs.transformer} ¢`, { type: 'transformer', at: n.id }, { primary: true, icon: 'xfmr', disabled: state.inv.transformers < 1 || state.credits < bal.costs.transformer }) : btn('Connect buildings in reach', { type: 'dropAll', node: n.id }, { primary: true, icon: 'plug' });
         return (
           head('pole', `${tn(n.tier)} ${n.tier === 'HV' ? 'tower' : 'pole'}`, tierDesc) +
-          pill(n.energized ? 'st-on' : 'st-off', n.energized ? 'Energised' : n.connected ? 'Connected (no power)' : 'Not connected to supply', n.energized ? 'bolt' : 'plug') +
+          pill(n.energized ? 'st-on' : 'st-off', n.energized ? 'Live' : n.connected ? 'Connected (no power)' : 'Not connected to supply', n.energized ? 'bolt' : 'plug') +
           kv([['Connections', conns], ['Max line load', fmt.kw(thru)], ['Voltage', tn(n.tier)]]) +
           `<div class="actions">${mount}${btn('Remove', { type: 'confirmRemove', target: n.id }, { danger: true, icon: 'trash' })}</div>` +
           `<div class="note">${n.tier === 'HV' ? 'Build a substation here to step down to 11 kV for a district.' : n.tier === 'MV' ? 'Mount a transformer here to start a 400 V branch.' : `Buildings within ${bal.network.dropReach} m can take a service drop from this pole.`}</div>`
@@ -240,7 +251,7 @@ export function createInspector(ui, cb) {
       const loss = e.kind === 'line' ? e.loadKW * bal.network.lossPer100m * (e.length / 100) * (e.loadKW / rating) : 0;
       const job = ctx.crewJob(e.id);
       const cool = e.state === 'trip' ? Math.max(0, (e.coolUntil || 0) - state.t) : 0;
-      const stp = e.state === 'fault' ? pill('st-bad', 'DAMAGED — needs repair', 'alert') : e.state === 'trip' ? pill('st-bad', 'Tripped (overload)', 'alert') : e.overMin > 0 ? pill('st-warn', 'Overloaded', 'warn') : pill(e.energized ? 'st-on' : 'st-off', e.energized ? 'Energised' : 'Dead', e.energized ? 'bolt' : 'plug');
+      const stp = e.state === 'fault' ? pill('st-bad', 'Damaged: needs repair', 'alert') : e.state === 'trip' ? pill('st-bad', 'Tripped (overload)', 'alert') : e.overMin > 0 ? pill('st-warn', 'Overloaded', 'warn') : pill(e.energized ? 'st-on' : 'st-off', e.energized ? 'Live' : 'No power', e.energized ? 'bolt' : 'plug');
       return (
         head(e.kind === 'drop' ? 'plug' : 'cable', e.kind === 'drop' ? 'Service drop' : `${tn(e.tier)} line`, `${Math.round(e.length)} m`) +
         stp +
@@ -248,11 +259,49 @@ export function createInspector(ui, cb) {
         (e.kind === 'line' && (e.state === 'trip' || e.overMin > 0) && ctx.lineAdvice ? ((A) => `<div class="why"><b>Why it’s overloaded</b>${A.who} ${A.why}</div><div class="why"><b>How to fix</b>${A.fixes.map((f) => `• ${f}`).join('<br>')}</div>`)(ctx.lineAdvice(e.id)) : '') +
         (rating ? `<div class="meter-label" style="margin-top:12px"><span>Load ${fmt.kw(e.loadKW)}</span><span>Rating ${fmt.kw(rating)}</span></div>${meter((e.loadKW / rating) * 100)}` : '') +
         kv([e.kind === 'line' ? ['Losses now', loss >= 1 ? fmt.kw(loss) : `${(loss * 1000).toFixed(0)} W`] : null, e.kind === 'drop' ? ['Feeds', esc(state.map.customers.find((c) => c.id === e.b)?.name || '')] : null, job ? ['Crew', job] : null]) +
-        (e.tie ? `<div class="why ${e.open ? '' : 'ok'}"><b>Tie switch — normally open</b>${e.open ? 'Open: the two feeders run separately. Close it to re-route supply around a fault.' : 'Closed: power can flow between the two feeders.'}</div><div class="actions">${btn(e.open ? 'Close switch' : 'Open switch', { type: 'switch', target: e.id, open: !e.open }, { primary: e.open, icon: 'cable' })}</div>` : '') +
+        (e.tie ? `<div class="why ${e.open ? '' : 'ok'}"><b>Tie switch (normally open)</b>${e.open ? 'Open: the two feeders run separately. Close it to re-route supply around a fault.' : 'Closed: power can flow between the two feeders.'}</div><div class="actions">${btn(e.open ? 'Close switch' : 'Open switch', { type: 'switch', target: e.id, open: !e.open }, { primary: e.open, icon: 'cable' })}</div>` : '') +
         `<div class="actions">${e.state === 'trip' ? btn(cool > 0 ? `Reset (cooling ${cool} min)` : 'Reset', { type: 'reset', target: e.id }, { primary: cool <= 0, disabled: cool > 0, icon: 'restart' }) : ''}${e.state === 'fault' ? btn(`Send repair crew · ${bal.costs.repairLabour} ¢ + kit`, { type: 'repair', target: e.id }, { primary: true, icon: 'truck', disabled: !!job || state.inv.kits < 1 }) : ''}${btn('Remove', { type: 'confirmRemove', target: e.id }, { danger: true, icon: 'trash' })}</div>`
       );
     }
     return '';
+  }
+
+  // ---------------------------------------------------------------- the Gazette and community panels
+  const when = (clock) => `Day ${Math.floor(clock / 1440) + 1}, ${String(Math.floor((clock % 1440) / 60)).padStart(2, '0')}:${String(clock % 60).padStart(2, '0')}`;
+  function newsPanel(state) {
+    const items = (state.ev?.news || []).slice().reverse();
+    return (
+      head('news', 'The Gazette', 'Local news about your grid') +
+      (items.length ? items.slice(0, 12).map((n) => `<div class="news-item ${n.tone}"><div class="when">${when(n.clock)}</div><b>${esc(n.text)}</b></div>`).join('') : '<p class="muted">No news yet. When something happens on your grid, the town paper will write about it here.</p>')
+    );
+  }
+  function communityPanel(state, ctx) {
+    const ev = state.ev;
+    if (!ev) return '';
+    const r = Math.round(ev.rep);
+    const S2 = ev.stats;
+    const open = Object.values(ev.choices).filter((c) => !c.done);
+    const next = ev.deck.filter((d) => d.phase === 'warned');
+    const boost = ev.boostUntil > state.t;
+    const bal = ctx.bal;
+    return (
+      head('heart', 'Community', 'What people think of you') +
+      `<div class="meter-label" style="margin-top:6px"><span>Reputation</span><span>${r} / 100</span></div>` +
+      meter(r, 101) +
+      `<div class="why ${r >= 60 ? 'ok' : ''}"><b>${r >= 75 ? 'People love their power company.' : r >= 55 ? 'People are mostly happy.' : r >= 40 ? 'People are getting frustrated.' : 'People are angry with you.'}</b>It goes up when the lights stay on, repairs are quick, festivals stay lit and you keep your promises. Long outages, ignored requests and broken promises bring it down. It counts for 10 points of your final score.</div>` +
+      (open.length ? sec('Waiting for your answer') + open.map((c) => `<div class="why"><b>${esc(c.title)}</b>${esc(c.text)}<div class="actions">${btn('Answer', { type: 'openChoice', id: c.id }, { primary: true })}</div></div>`).join('') : '') +
+      (next.length ? sec('Coming up') + kv(next.map((d) => [LABEL[d.kind] ? LABEL[d.kind][0].toUpperCase() + LABEL[d.kind].slice(1) : d.kind, `in ${fmt.dur(Math.max(0, d.hitAt - state.clock))}`])) : '') +
+      sec('So far') +
+      kv([
+        ['Repairs done quickly', `${S2.restoredFast}`],
+        ['Slow repairs', `${S2.restoredSlow}`],
+        ['Breakdowns avoided', `${S2.avoided}`],
+        ['Festivals kept lit', `${S2.festivalsLit} of ${S2.festivalsLit + S2.festivalsDark}`],
+        ['Requests said yes to', `${S2.requestsYes} of ${S2.requestsYes + S2.requestsNo}`],
+        ['Protests', `${S2.protests}`],
+      ]) +
+      `<div class="actions">${btn(boost ? `Contractors on site · ${fmt.dur(ev.boostUntil - state.t)} left` : `Hire contractors · ${fmt.cr(bal.costs.contractors ?? 1200)}`, { type: 'contractors' }, { disabled: boost || state.credits < (bal.costs.contractors ?? 1200), icon: 'truck', title: 'For 12 hours your crew travels and repairs twice as fast.' })}${btn('Read the Gazette', { type: 'openPanel', kind: 'news' }, { icon: 'news' })}</div>`
+    );
   }
 
   // ---------------------------------------------------------------- Stage 1 generator (unchanged)
@@ -299,10 +348,10 @@ export function createInspector(ui, cb) {
     const job = ctx.crewJob(id);
     let st;
     if (g.retired) st = ['st-off', 'Retired', 'dark'];
-    else if (g.damaged) st = ['st-bad', 'Storm damage — needs repair', 'alert'];
+    else if (g.damaged) st = ['st-bad', 'Storm damage: needs repair', 'alert'];
     else if (g.servicing) st = ['st-info', 'Servicing', 'wrench'];
     else if (T.storage) st = g.chargeKW > 0.1 ? ['st-info', `Charging ${fmt.kw(g.chargeKW)}`, 'battery'] : g.outKW > 0.1 ? ['st-on', `Discharging ${fmt.kw(g.outKW)}`, 'bolt'] : ['st-off', g.mode === 'hold' ? 'Holding charge' : 'Idle', 'battery'];
-    else if (T.variable) st = g.availKW > 0.5 ? ['st-on', 'Generating', T.variable === 'solar' ? 'sun' : 'wind'] : ['st-off', T.variable === 'solar' ? (state.weather?.sun > 0 ? 'Too cloudy' : 'Night — no sun') : state.weather?.wind >= 25 ? 'Storm cut-out (>25 m/s)' : 'Too little wind', T.variable === 'solar' ? 'sun' : 'wind'];
+    else if (T.variable) st = g.availKW > 0.5 ? ['st-on', 'Generating', T.variable === 'solar' ? 'sun' : 'wind'] : ['st-off', T.variable === 'solar' ? (state.weather?.sun > 0 ? 'Too cloudy' : 'Night: no sun') : state.weather?.wind >= 25 ? 'Storm cut-out (>25 m/s)' : 'Too little wind', T.variable === 'solar' ? 'sun' : 'wind'];
     else st = g.status === 'running' ? ['st-on', S.genState.running, 'bolt'] : g.status === 'starting' ? ['st-warn', S.genState.starting, 'bolt'] : g.status === 'nofuel' ? ['st-bad', S.genState.nofuel, 'fuel'] : ['st-off', S.genState.off, 'bolt'];
     const rows = [
       ['Rated', fmt.kw(rated)],
@@ -327,7 +376,7 @@ export function createInspector(ui, cb) {
       const soc = (g.soc / g.kwh) * 100;
       extra += `<div class="meter-label" style="margin-top:10px"><span>Charge ${fmt.kwh(g.soc)} / ${fmt.kwh(g.kwh)}</span><span>${Math.round(soc)}%</span></div>${meter(soc, null, 'var(--green)')}`;
       extra += `${sec('Battery mode')}<div class="seg" role="radiogroup" aria-label="Battery mode">${[['auto', 'Auto'], ['charge', 'Charge only'], ['hold', 'Hold']].map(([m, l]) => `<button role="radio" aria-checked="${g.mode === m}" class="${g.mode === m ? 'on' : ''}" data-act='${JSON.stringify({ type: 'battery', target: id, mode: m })}'>${l}</button>`).join('')}</div>`;
-      extra += `<div class="note">Auto: stores surplus clean power and covers shortfalls. It moves energy in time — it can’t create it (≈${Math.round((T.eff ?? 0.9) * 100)}% round trip).</div>`;
+      extra += `<div class="note">Auto: stores surplus clean power and covers shortfalls. It moves energy to a later time. It can’t create it (about ${Math.round((T.eff ?? 0.9) * 100)}% round trip).</div>`;
     }
     if (T.reservoir) {
       extra += `<div class="meter-label" style="margin-top:10px"><span>Reservoir ${fmt.kwh(g.reservoir)}</span><span>inflow ${fmt.kw(T.inflowKW || 0)}</span></div>${meter((g.reservoir / T.reservoir) * 100, null, 'var(--cyan)')}`;
@@ -348,7 +397,7 @@ export function createInspector(ui, cb) {
       kv(rows) +
       extra +
       (acts ? `<div class="actions">${acts}</div>` : '') +
-      (f.curtailedKW > 1 && T.variable ? `<div class="note">${fmt.kw(f.curtailedKW)} of clean power is being curtailed — storage or more demand at this hour would use it.</div>` : '') +
+      (f.curtailedKW > 1 && T.variable ? `<div class="note">${fmt.kw(f.curtailedKW)} of clean power is going to waste. Storage, or more demand at this hour, would use it.</div>` : '') +
       policySeg(state)
     );
   }
@@ -439,7 +488,7 @@ export function createInspector(ui, cb) {
             if (i > 0) [up[i - 1], up[i]] = [up[i], up[i - 1]];
             const T = srcType(bal, t);
             const fuelCost = T.fuel && bal.procurement?.fuel ? bal.procurement.fuel.cost / bal.procurement.fuel.qty / (T.kWhPerFuel || bal.generator?.kWhPerFuel || 20) : null;
-            const cost = T.costPerKWh ? `${T.costPerKWh.toFixed(2)} ¢/kWh` : fuelCost != null ? `≈${fuelCost.toFixed(2)} ¢/kWh fuel` : T.storage ? 'stored' : 'no fuel cost';
+            const cost = T.costPerKWh ? `${T.costPerKWh.toFixed(2)} ¢/kWh` : fuelCost != null ? `about ${fuelCost.toFixed(2)} ¢/kWh fuel` : T.storage ? 'stored' : 'no fuel cost';
             return `<div class="tariff-row"><span class="tl">${i + 1}. ${S.srcName[t]}</span><span class="tb">${cost} · ${T.co2 ? T.co2 + ' kg/kWh' : 'clean'}</span>${btn('↑', { type: 'dispatchOrder', order: up }, { disabled: i === 0, aria: `Move ${t} up` })}</div>`;
           })
           .join('')
@@ -448,10 +497,10 @@ export function createInspector(ui, cb) {
     // the sun/wind forecast only matters once the map has (or can build) weather-driven supply
     const variable = Object.values(bal.sourceTypes || {}).some((T) => T.variable);
     if (ctx.mission.systems?.weather && variable) {
-      const f = forecast(state.seed, state.clock, ctx.mission.weather, 24);
+      const f = forecast(state.weatherSeed ?? state.seed, state.clock, ctx.mission.weather, 24);
       const W = 288 / 24;
       const bars = f.map((w, i) => `<rect x="${i * W + 1}" y="${40 - w.sun * (1 - 0.78 * w.cloud) * 36}" width="${W - 2}" height="${w.sun * (1 - 0.78 * w.cloud) * 36}" rx="2" fill="#ffc63a"/><rect x="${i * W + 1}" y="${80 - Math.min(1, w.wind / 25) * 36}" width="${W - 2}" height="${Math.min(1, w.wind / 25) * 36}" rx="2" fill="${w.wind >= 25 || w.wind < 3 ? '#ff5a4e' : '#7cc4f0'}"/>`).join('');
-      fc = sec('Next 24 h — sun (top) and wind (bottom)') + `<svg viewBox="0 0 288 84" style="width:100%" role="img" aria-label="Weather forecast">${bars}<line x1="0" x2="288" y1="${80 - (3 / 25) * 36}" y2="${80 - (3 / 25) * 36}" stroke="#c2b29c" stroke-dasharray="2 3"/></svg><div class="note">Red wind bars: below cut-in or above storm cut-out — turbines produce nothing. ${f.find((w) => w.label)?.label ? `<b>${esc(f.find((w) => w.label).label)}</b>` : ''}</div>`;
+      fc = sec('Next 24 h: sun (top) and wind (bottom)') + `<svg viewBox="0 0 288 84" style="width:100%" role="img" aria-label="Weather forecast">${bars}<line x1="0" x2="288" y1="${80 - (3 / 25) * 36}" y2="${80 - (3 / 25) * 36}" stroke="#c2b29c" stroke-dasharray="2 3"/></svg><div class="note">Red wind bars: too little wind, or so much that turbines shut down to protect themselves. Either way they make nothing. ${f.find((w) => w.label)?.label ? `<b>${esc(f.find((w) => w.label).label)}</b>` : ''}</div>`;
     }
     const day = state.days?.[state.days.length - 1];
     const progBtn = ctx.mission.ui.programsPanel ? `<div class="actions">${btn('Programs', { type: 'openPanel', kind: 'programs' }, { primary: true, icon: 'bolt' })}</div>` : '';
@@ -459,7 +508,7 @@ export function createInspector(ui, cb) {
       head('bolt', 'Supply mix', `Generating ${fmt.kw(total)}`) +
       progBtn +
       kv(rows) +
-      (state.ledger && Object.values(bal.sourceTypes || {}).some((T) => T.renewable || T.variable) ? kv([['Renewable share today', `${state.ledger.kWhGen > 0 ? Math.round((state.ledger.kWhRenew / state.ledger.kWhGen) * 100) : 0}%`], day ? ['Yesterday', `${Math.round(day.renewPct)}% renewable · ${(day.co2 / 1000).toFixed(2)} t CO₂`] : null, state.flow.curtailedKW > 0.5 ? ['Curtailed now', fmt.kw(state.flow.curtailedKW)] : null]) : '') +
+      (state.ledger && Object.values(bal.sourceTypes || {}).some((T) => T.renewable || T.variable) ? kv([['Renewable share today', `${state.ledger.kWhGen > 0 ? Math.round((state.ledger.kWhRenew / state.ledger.kWhGen) * 100) : 0}%`], day ? ['Yesterday', `${Math.round(day.renewPct)}% renewable · ${(day.co2 / 1000).toFixed(2)} t CO₂`] : null, state.flow.curtailedKW > 0.5 ? ['Clean power going to waste', fmt.kw(state.flow.curtailedKW)] : null]) : '') +
       disp +
       fc
     );

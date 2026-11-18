@@ -2,7 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSim, loadSim } from '../src/sim/sim.js';
 import { BALANCE } from '../src/data/balance.js';
-import { MISSION1 } from '../src/data/mission1.js';
+import { MISSION1 as M1 } from '../src/data/mission1.js';
+
+// Stage 1 rule tests run without run events; events have their own tests (tests/events.test.mjs).
+const MISSION1 = { ...M1, customers: M1.customers.filter((c) => !c.surprise) };
 import { demandAt } from '../src/sim/power.js';
 import { nodeAt } from '../src/sim/grid.js';
 
@@ -60,7 +63,7 @@ test('demand profile matches the balance sheet (night 16.8, day 35, peak 47.8 kW
 });
 
 test('a line merely ending next to a building does not power it (touching ≠ powered)', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   let r = sim.cmd({ type: 'line', from: 'gen', to: { x: -62, z: -8 } });
   r = sim.cmd({ type: 'line', from: r.last, to: { x: -24, z: -8 } });
   r = sim.cmd({ type: 'line', from: r.last, to: { x: -2, z: 10 } });
@@ -77,7 +80,7 @@ test('a line merely ending next to a building does not power it (touching ≠ po
 });
 
 test('11 kV cannot connect straight to 400 V; buildings refuse lines', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   let r = sim.cmd({ type: 'line', from: 'gen', to: { x: -62, z: -8 } });
   const mvPole = r.last;
   r = sim.cmd({ type: 'line', from: mvPole, to: { x: -30, z: -8 } });
@@ -97,7 +100,7 @@ test('11 kV cannot connect straight to 400 V; buildings refuse lines', () => {
 });
 
 test('reference layout fits the budget (13 poles, ≤ 400 m, < 60% credits)', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   buildReference(sim);
   const s = sim.state;
   assert.equal(BALANCE.start.poles - s.inv.poles, 13);
@@ -107,7 +110,7 @@ test('reference layout fits the budget (13 poles, ≤ 400 m, < 60% credits)', ()
 });
 
 test('a single transformer feeding the whole town trips at the evening peak; two transformers hold', () => {
-  const one = createSim();
+  const one = createSim({ events: false });
   let r = one.cmd({ type: 'line', from: 'gen', to: { x: -62, z: -8 } });
   r = one.cmd({ type: 'line', from: r.last, to: { x: -24, z: -8 } });
   r = one.cmd({ type: 'line', from: r.last, to: { x: 4, z: -8 } });
@@ -136,7 +139,7 @@ test('a single transformer feeding the whole town trips at the evening peak; two
   assert.ok(evs.some((e) => e.type === 'xfmrTrip'), 'single transformer trips');
   assert.equal(one.state.stats.trips, 1);
 
-  const two = createSim();
+  const two = createSim({ events: false });
   buildReference(two);
   two.cmd({ type: 'startGen' });
   runHours(two, 6);
@@ -144,7 +147,7 @@ test('a single transformer feeding the whole town trips at the evening peak; two
 });
 
 test('losses are small and labelled-simplified range (1–6 %)', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   buildReference(sim);
   sim.cmd({ type: 'startGen' });
   runHours(sim, 2);
@@ -154,7 +157,7 @@ test('losses are small and labelled-simplified range (1–6 %)', () => {
 });
 
 test('the clock is frozen until the generator starts; ticks do nothing before', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   buildReference(sim);
   const h = sim.hash();
   for (let i = 0; i < 100; i++) sim.tick();
@@ -163,7 +166,7 @@ test('the clock is frozen until the generator starts; ticks do nothing before', 
 });
 
 test('reference strategy reaches victory with fault repaired and one fuel resupply', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   playReference(sim);
   const s = sim.state;
   assert.equal(s.result?.outcome, 'victory', JSON.stringify(s.result));
@@ -175,7 +178,7 @@ test('reference strategy reaches victory with fault repaired and one fuel resupp
 });
 
 test('fuel starvation leads to failure after warnings', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   buildReference(sim);
   sim.cmd({ type: 'startGen' });
   const evs = [];
@@ -194,17 +197,17 @@ test('fuel starvation leads to failure after warnings', () => {
 });
 
 test('restart and replay are deterministic (identical hash)', () => {
-  const a = createSim({ seed: 42 });
+  const a = createSim({ events: false, seed: 42 });
   playReference(a);
   const save = a.save();
   const b = loadSim(save);
   assert.equal(b.hash(), a.hash());
   // a fresh sim with the same seed starts identical
-  assert.equal(createSim({ seed: 42 }).hash(), createSim({ seed: 42 }).hash());
+  assert.equal(createSim({ events: false, seed: 42 }).hash(), createSim({ events: false, seed: 42 }).hash());
 });
 
 test('save/load mid-mission round-trips through JSON', () => {
-  const a = createSim({ seed: 7 });
+  const a = createSim({ events: false, seed: 7 });
   buildReference(a);
   a.cmd({ type: 'startGen' });
   runHours(a, 30);
@@ -218,7 +221,7 @@ test('save/load mid-mission round-trips through JSON', () => {
 
 test('scripted fault is telegraphed, darkens its customers, and pre-dispatch shortens restoration', () => {
   const run = (pre) => {
-    const sim = createSim();
+    const sim = createSim({ events: false });
     buildReference(sim);
     sim.cmd({ type: 'startGen' });
     let warnAt = null;
@@ -246,7 +249,7 @@ test('scripted fault is telegraphed, darkens its customers, and pre-dispatch sho
 });
 
 test('maintenance restores condition and costs credits; generator servicing caps output', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   buildReference(sim);
   sim.cmd({ type: 'startGen' });
   runHours(sim, 20);
@@ -266,7 +269,7 @@ test('maintenance restores condition and costs credits; generator servicing caps
 });
 
 test('remove refunds 50% credits and returns materials', () => {
-  const sim = createSim();
+  const sim = createSim({ events: false });
   const r = sim.cmd({ type: 'line', from: 'gen', to: { x: -62, z: -8 } });
   const before = { ...sim.state.inv, credits: sim.state.credits };
   const rm = sim.cmd({ type: 'remove', target: r.last });

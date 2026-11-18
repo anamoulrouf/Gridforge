@@ -8,6 +8,7 @@ import { fmt } from '../data/strings.js';
 import { lvNodesInReach, dropOf } from '../sim/grid.js';
 import { typeDef } from '../sim/power.js';
 import { runSteps } from '../sim/steps.js';
+import { drainAndRespond } from '../sim/events.js';
 
 const D2 = 1440; // minutes per day
 const day = (d, h) => (d - 1) * D2 + h * 60; // absolute clock minute of day d, hour h
@@ -67,6 +68,8 @@ export const MAP2 = {
     home('n4', 'New home · Plot 4', 92, 77, { appearAt: GROW1 }), home('n5', 'New home · Plot 5', 116, 77, { appearAt: GROW1 }), home('n6', 'New home · Plot 6', 140, 77, { appearAt: GROW1 }),
     home('n7', 'New home · Plot 7', 164, 44, { appearAt: GROW2 }), home('n8', 'New home · Plot 8', 164, 77, { appearAt: GROW2 }), home('n9', 'New home · Plot 9', 188, 44, { appearAt: GROW2 }), home('n10', 'New home · Plot 10', 188, 77, { appearAt: GROW2 }),
     row('li5', 'Orchard Row', 120, 104, { appearAt: GROW2 }), row('li6', 'Meadow Row', 160, 104, { appearAt: GROW2 }),
+    // surprise: a school annexe goes up in some runs
+    { id: 'annexe', type: 'school', name: 'School annexe (new)', x: -8, z: 108, w: 18, d: 10, surprise: 'annexe' },
   ],
 };
 
@@ -139,8 +142,8 @@ const objectives = [
     eval: (st) => ({ done: !!st.inspected.finance }),
     guide: (st, bal) => ({
       title: 'Review the tariffs for each customer class',
-      why: 'Revenue pays for fuel, staff and growth — but prices also shape trust and whether poorer households can afford power.',
-      steps: [`Click the <b>Yesterday</b> (cash) chip in the top bar — or the <b>Afford.</b> chip.`, 'Read the last statement and the four class tariffs.', `Use <b>−</b>/<b>+</b> to adjust a tariff inside the regulator’s band.`],
+      why: 'Your income pays for fuel, staff and new equipment. But prices also decide how much people trust you, and whether poorer families can afford power at all.',
+      steps: [`Click the <b>Yesterday</b> (cash) chip in the top bar, or the <b>Afford.</b> chip.`, 'Read the last statement and the four class tariffs.', `Use <b>−</b>/<b>+</b> to adjust a tariff inside the regulator’s band.`],
       now: [st.inspected.finance ? ok('Finance panel opened') : todo('Not opened yet'), info(`Low-income tariff ${st.tariffs.lowincome.toFixed(2)} ¢ → bill share ${st.affordPct.toFixed(1)}% (limit ${bal.afford.limitPct}%)`)],
       tip: 'Businesses can usually carry a higher tariff than low-income homes.',
       focus: null,
@@ -157,7 +160,7 @@ const objectives = [
       const r = n ? n.ratingKW : bal.transformer.ratingKW;
       return {
         title: 'Get the old quarter through an evening peak',
-        why: 'The inherited transformer T1 is rated 40 kW, but the old quarter needs ≈ 50 kW at 18:00 — homes, terrace rows, the clinic and the water pumps all peak together.',
+        why: 'The inherited transformer T1 is rated 40 kW, but the old quarter needs about 50 kW at 18:00, when homes, terrace rows, the clinic and the water pumps all peak together.',
         steps: [`Click <b>${ctx.xfmrName(t1)}</b> (west of the Old Road junction).`, `Either <b>Upgrade</b> it to 100 kW (${bal.upgrades.xfmr100.cost} ¢), or build a second transformer and move some buildings to it.`, 'Get through 18:00–22:00 without a protective trip and with everyone lit.'],
         now: [n ? (n.forecastPeakKW > r ? warn(`${ctx.xfmrName(t1)} forecast peak <b>${fmt.kw(n.forecastPeakKW)}</b> &gt; ${fmt.kw(r)} rating`) : ok(`${ctx.xfmrName(t1)} forecast ${fmt.kw(n.forecastPeakKW)} within ${fmt.kw(r)}`)) : info('Transformer removed'), st.flags.peakOk ? ok('Evening peak handled') : todo('Next check: 22:00 tonight')],
         focus: n ? { x: n.x, z: n.z, sel: { kind: 'node', id: t1 } } : null,
@@ -176,7 +179,7 @@ const objectives = [
       const near = miss.filter((c) => lvNodesInReach(st, bal, c.id).length && !dropOf(st, c.id));
       return {
         title: 'Power the High Street shops and offices',
-        why: 'Businesses pay a higher tariff and use power by day — they balance the evening-heavy homes.',
+        why: 'Businesses pay a higher price and use power by day, which balances the homes that use most in the evening.',
         steps: [`Draw an 11 kV line (${k('L')}) from an existing 11 kV pole east along the main road toward the High Street.`, `Mount a transformer (${k('T')}) on an 11 kV pole near the shops.`, `Run 400 V lines between the shops and connect them with ${k('C')}.`],
         now: [miss.length ? todo(`${SHOPS.length - miss.length} / ${SHOPS.length} powered`) : ok('All High Street customers powered'), near.length ? info(`Ready for a drop: <b>${near.map((c) => c.name).join(', ')}</b>`) : null].filter(Boolean),
         focus: { x: 40, z: -50 },
@@ -200,7 +203,7 @@ const objectives = [
       return {
         title: 'Connect the new estate as families move in',
         why: 'Millbrook is growing: six homes arrive on day 2 and six more (with two terrace rows) on day 3. Families waiting for power lose trust in you.',
-        steps: ['Bring 11 kV to the estate east of the High Street.', 'Add a transformer sized for the estate’s evening peak (≈ 33 kW, more in a heat wave).', 'Run 400 V lines along Estate Road and connect each home as it appears (marked plots show where).'],
+        steps: ['Bring 11 kV to the estate east of the High Street.', 'Add a transformer sized for the estate’s evening peak (about 33 kW, more in a heat wave).', 'Run 400 V lines along Estate Road and connect each home as it appears (marked plots show where).'],
         now: [info(`Families moved in: ${appeared.length} / ${NEW.length}${appeared.length < NEW.length ? ` · next arrivals ${st.clock < GROW1 ? 'day 2, 08:00' : 'day 3, 08:00'}` : ''}`), waiting.length ? warn(`Waiting for power: <b>${waiting.length}</b>`) : appeared.length ? ok('Everyone who has moved in is powered') : null].filter(Boolean),
         focus: { x: 140, z: 60 },
         focusLabel: 'Show the estate',
@@ -217,8 +220,8 @@ const objectives = [
       return {
         title: 'Ride out the day-3 heat wave',
         why: 'On day 3 fans and fridges push home and shop demand up 30 % from 13:00. Transformers and generators sized for a normal day may overload or run short.',
-        steps: ['Check each transformer’s forecast before day 3 (hover them or press O for the Capacity overlay).', `Add supply headroom — the <b>gas genset site</b> (${k('G')}) adds 100 kW.`, 'Keep the clinic and water pumps powered all day; aim for ≥ 95 % customer-hours.'],
-        now: [st.clock < day(3, 0) ? info('Heat wave arrives day 3 — forecast in the Supply panel') : st.flags.heatOk ? ok('Heat wave handled') : r != null ? (r >= 95 ? ok(`Reliability so far today ${r.toFixed(1)}%`) : warn(`Reliability so far today ${r.toFixed(1)}% (need 95%)`)) : todo('In progress'), st.flags.heatCritOut ? warn('A critical service lost power today — objective failed this time') : null, info(`Supply available: ${fmt.kw(st.flow.availKW || 0)} vs demand ${fmt.kw(st.flow.townDemandKW || 0)}`)].filter(Boolean),
+        steps: ['Check each transformer’s forecast before day 3 (hover them or press O for the Capacity overlay).', `Add spare supply: the <b>gas genset site</b> (${k('G')}) adds 100 kW.`, 'Keep the clinic and water pumps powered all day; aim for ≥ 95 % customer-hours.'],
+        now: [st.clock < day(3, 0) ? info('The heat wave arrives on day 3. See the forecast in the Supply panel') : st.flags.heatOk ? ok('Heat wave handled') : r != null ? (r >= 95 ? ok(`Reliability so far today ${r.toFixed(1)}%`) : warn(`Reliability so far today ${r.toFixed(1)}% (need 95%)`)) : todo('In progress'), st.flags.heatCritOut ? warn('A vital service lost power today, so this one is missed') : null, info(`Supply available: ${fmt.kw(st.flow.availKW || 0)} vs demand ${fmt.kw(st.flow.townDemandKW || 0)}`)].filter(Boolean),
         focus: st.gens.gas ? null : { x: -210, z: 30, sel: { kind: 'site', id: 'gas' } },
         focusLabel: st.gens.gas ? null : 'Show gas site',
       };
@@ -238,7 +241,7 @@ const objectives = [
       return {
         title: 'Two positive daily statements in a row',
         why: 'Your operating result must cover fuel, staff and overhead before you can keep growing. Construction is paid separately.',
-        steps: ['Sell more energy: connect the High Street and the estate.', 'Lower costs: the gas genset runs at 0.14 ¢/kWh versus ≈ 0.25 ¢/kWh for diesel fuel.', 'Adjust tariffs — businesses first; protect low-income bills.'],
+        steps: ['Sell more energy: connect the High Street and the estate.', 'Lower costs: the gas genset runs at 0.14 ¢/kWh versus about 0.25 ¢/kWh for diesel fuel.', 'Adjust prices: businesses first, and keep low-income bills down.'],
         now: [last ? (last.net >= 0 ? ok(`Day ${last.day}: +${fmt.cr(last.net)}`) : warn(`Day ${last.day}: −${fmt.cr(-last.net)}`)) : info('First statement at midnight'), info(`Today so far: revenue ${fmt.cr(st.ledger.revenue)}, energy ${fmt.cr(st.ledger.energyCost)}`)],
         focus: null,
       };
@@ -252,9 +255,9 @@ const objectives = [
     eval: (st, bal) => ({ done: st.affordPct <= bal.afford.limitPct + 1e-9 }),
     guide: (st, bal) => ({
       title: 'Keep low-income bills under 6% of income',
-      why: 'Energy poverty: when power costs too much of a poor household’s income, families cut back on heat, light and food — and trust collapses.',
+      why: 'Energy poverty: when power costs too much of a poor household’s income, families cut back on heat, light and food, and trust collapses.',
       steps: ['Open Finance (cash chip).', `Keep the <b>low-income</b> tariff at or below ${(bal.income.lowincome * bal.afford.limitPct / 100 / typeDef(bal, 'lowincome').dailyKWh).toFixed(2)} ¢/kWh.`, 'Recover revenue from businesses, efficiency and cheaper generation instead.'],
-      now: [st.affordPct <= bal.afford.limitPct ? ok(`Bill share ${st.affordPct.toFixed(1)}%`) : warn(`Bill share ${st.affordPct.toFixed(1)}% — over the ${bal.afford.limitPct}% limit`)],
+      now: [st.affordPct <= bal.afford.limitPct ? ok(`Bill share ${st.affordPct.toFixed(1)}%`) : warn(`Bill share ${st.affordPct.toFixed(1)}%, over the ${bal.afford.limitPct}% limit`)],
       focus: null,
     }),
   },
@@ -269,7 +272,7 @@ const objectives = [
       return {
         title: 'Every customer class trusts you (≥ 60)',
         why: 'Trust follows reliability, price and fairness. The regulator watches it: below 25 for 6 hours and your licence is revoked.',
-        steps: ['Avoid outages (trips, shortages, storm damage).', 'Don’t leave new families waiting long for a connection.', 'Keep tariffs near the regulator’s reference — especially for households.'],
+        steps: ['Avoid outages (trips, shortages, storm damage).', 'Don’t leave new families waiting long for a connection.', 'Keep prices near the regulator’s guide price, especially for households.'],
         now: low.map(([cls, v]) => (v >= 60 ? ok(`${cls}: ${Math.round(v)}`) : warn(`${cls}: ${Math.round(v)}`))),
         focus: null,
       };
@@ -282,7 +285,7 @@ const objectives = [
     eval: (st) => ({ done: !!st.gens.gas }),
     guide: (st) => ({
       title: 'Optional · Build the gas genset',
-      why: 'A second unit adds 100 kW of headroom for growth and the heat wave, and is cheaper per kWh than diesel.',
+      why: 'A second unit adds 100 kW of spare capacity for growth and the heat wave, and is cheaper per kWh than diesel.',
       steps: [`Press ${k('G')} (Build) and click the marked plot south of the diesel station.`, 'Choose the gas genset (2 400 ¢).', `Run an 11 kV line (${k('L')}) from it to your network, then press Start in its card.`],
       now: [st.gens.gas ? ok(`Built · ${st.gens.gas.status}`) : todo('Not built')],
       focus: { x: -210, z: 30, sel: { kind: 'site', id: 'gas' } },
@@ -388,7 +391,7 @@ function metrics(state) {
       ['Customers powered', `${state.flow.powered} / ${active.length}`],
       ['Energy delivered', fmt.kwh(s.kWhDelivered)],
       ['Peak demand', fmt.kw(s.peakKW)],
-      ['Reliability', `${s.custMinTotal ? ((s.custMinPowered / s.custMinTotal) * 100).toFixed(1) : '—'}%`],
+      ['Reliability', `${s.custMinTotal ? ((s.custMinPowered / s.custMinTotal) * 100).toFixed(1) + '%' : 'n/a'}`],
       ['Operating result (all days)', fmt.cr(days.reduce((a, d) => a + d.net, 0))],
       ['Credits now', fmt.cr(state.credits)],
       ['Low-income bill share', `${state.affordPct.toFixed(1)}%`],
@@ -400,43 +403,43 @@ function metrics(state) {
 
 // ------------------------------------------------------------------ narrative & learning
 const LEARN2 = {
-  tariffs: { title: 'Tariffs and fairness', what: 'You set what each customer class pays per kWh, within the regulator’s band.', why: 'Revenue must cover fuel, staff and investment — but price affects demand, trust and whether poorer households can afford power.', todo: ['Recover more from businesses, which use power to earn money.', 'Keep low-income bills under 6 % of income.', 'Cut costs (cheaper generation, fewer losses) before raising household prices.'], real: 'Real utilities file tariff schedules with a regulator; many use “lifeline” or social tariffs for low-income homes.' },
+  tariffs: { title: 'Tariffs and fairness', what: 'You set what each customer class pays per kWh, within the regulator’s band.', why: 'Your income has to cover fuel, staff and new equipment. But price affects how much people use, how much they trust you, and whether poorer families can afford power.', todo: ['Recover more from businesses, which use power to earn money.', 'Keep low-income bills under 6 % of income.', 'Cut costs (cheaper generation, fewer losses) before raising household prices.'], real: 'Real utilities file tariff schedules with a regulator; many use “lifeline” or social tariffs for low-income homes.' },
   statement: { title: 'Your first daily statement', what: 'Day closed with revenue {rev} and an operating result of {net}.', why: 'Revenue comes from kWh sold × tariff. Costs are fuel or gas, staff overhead and any penalties. Construction is capital spending and isn’t in the daily result.', todo: ['Click the cash chip any time for the breakdown and tariffs.', 'Two positive days in a row complete an objective.'], real: 'Utilities track operating margin separately from capital investment, which is usually financed over many years.' },
-  growth: { title: 'The town is growing', what: 'New families have moved into the estate and need connections.', why: 'Population growth raises both energy and peak demand. Each new home adds about 2.5 kW to the evening peak.', todo: ['Connect new homes quickly — waiting families lose trust.', 'Check the transformer and generator headroom as load grows.'], real: 'Planners forecast growth years ahead so substations and lines are ready before the houses are.' },
-  heat: { title: 'Heat wave tomorrow', what: 'Forecasters expect a heat wave on day 3.', why: 'Fans, fridges and cooling raise home and business demand about 30 % in the afternoon and evening. Equipment that was fine yesterday can overload.', todo: ['Check every transformer’s forecast peak and upgrade or split the busiest.', 'Add generation headroom — the gas genset adds 100 kW.', 'Keep the clinic and water pumps protected.'], real: 'Heat waves set many networks’ all-time peaks; operators issue conservation appeals and bring every unit online.' },
+  growth: { title: 'The town is growing', what: 'New families have moved into the estate and need connections.', why: 'Population growth raises both energy and peak demand. Each new home adds about 2.5 kW to the evening peak.', todo: ['Connect new homes quickly. Families kept waiting lose trust.', 'Check there’s spare transformer and generator capacity as the load grows.'], real: 'Planners forecast growth years ahead so substations and lines are ready before the houses are.' },
+  heat: { title: 'Heat wave tomorrow', what: 'Forecasters expect a heat wave on day 3.', why: 'Fans, fridges and cooling raise home and business demand about 30 % in the afternoon and evening. Equipment that was fine yesterday can overload.', todo: ['Check every transformer’s forecast peak and upgrade or split the busiest.', 'Add spare supply: the gas genset adds 100 kW.', 'Keep the clinic and water pumps protected.'], real: 'Heat waves set many networks’ all-time peaks; operators issue conservation appeals and bring every unit online.' },
   storm: { title: 'Storm damage', what: 'High winds brought down an 11 kV span. The customers beyond it are dark.', why: 'Overhead lines are exposed to wind and falling trees. A radial network has only one path to each customer.', todo: ['Send the repair crew to the damaged span (1 kit + labour).', 'Later stages let you add backup paths so one span can’t black out a district.'], real: 'Storms cause most distribution outages; utilities pre-position crews when they’re forecast.' },
   trust: { title: 'Trust is slipping', what: 'One customer class’s trust is falling.', why: 'Outages, long waits for a connection, high prices and unaffordable bills all pull trust down.', todo: ['Open the Trust panel for the breakdown.', 'Fix the biggest cause first.'], real: 'Regulators can fine or replace utilities that fail their customers.' },
 };
 
 const LINES2 = {
   ...L1,
-  intro: [['advisor', 'Welcome to Millbrook. You’ve inherited a small diesel utility — and a town that is about to grow.'], ['sofia', 'The old quarter’s transformer is undersized. It won’t survive tonight’s peak as it is.']],
+  intro: [['advisor', 'Welcome to Millbrook. You’ve taken over a small diesel power company, and a town that is about to grow.'], ['sofia', 'The old quarter’s transformer is undersized. It won’t survive tonight’s peak as it is.']],
   peakOk: [['sofia', 'The old quarter made it through the peak. Nice work.']],
   peakMissed: [['sofia', 'The old quarter didn’t make it through the peak cleanly. We’ll try again tomorrow evening.']],
   growth: [['maya', 'New families are moving into the estate! They’re asking when the lights come on.']],
   heatForecast: [['advisor', 'Weather service: heat wave tomorrow. Expect about 30 % more demand from 13:00.']],
-  stormForecast: [['sofia', 'Storm overnight. Keep a repair kit ready — an exposed 11 kV span could come down.']],
+  stormForecast: [['sofia', 'Storm tonight. Keep a repair kit ready. An exposed 11 kV line could come down.']],
   stormDamage: [['sofia', 'The storm brought down an 11 kV span. Send the crew.']],
-  heatOk: [['maya', 'Everyone kept their power through the heat — the clinic and the pumps never missed a beat.']],
+  heatOk: [['maya', 'Everyone kept their power through the heat. The clinic and the pumps never missed a beat.']],
   tariff: [['daniel', 'Tariff change noted. Watch trust and the low-income bill share.']],
-  tutorialDone: [['advisor', 'You know Millbrook now. Keep growing — fairly.']],
+  tutorialDone: [['advisor', 'You know Millbrook now. Keep growing, and keep it fair.']],
 };
 
 const TUT2 = [
   { id: 'fin', title: 'Open the books', body: 'Click the cash chip (“Yesterday”) in the top bar. Tariffs, the daily statement and affordability live there.', target: { ui: '#chip-cash' }, done: (st) => !!st.inspected.finance },
-  { id: 't1', title: 'T1 will overload tonight', body: 'The old quarter needs ≈ 50 kW at 18:00 but T1 is rated 40 kW — it trips an hour after the peak starts. Click T1 and Upgrade it (or build a second transformer and move load).', target: { world: 'node', find: (st) => st.nodes[T1(st)], label: 'T1 — overloads at 18:00' }, done: (st) => { const n = st.nodes[T1(st)]; return !n || n.forecastPeakKW <= n.ratingKW; } },
+  { id: 't1', title: 'T1 will overload tonight', body: 'The old quarter needs about 50 kW at 18:00, but T1 is built for 40 kW. It will switch off an hour after the peak starts. Click T1 and Upgrade it (or build a second transformer and move load).', target: { world: 'node', find: (st) => st.nodes[T1(st)], label: 'T1: overloads at 18:00' }, done: (st) => { const n = st.nodes[T1(st)]; return !n || n.forecastPeakKW <= n.ratingKW; } },
   { id: 'shops', title: 'Wire up the High Street', body: 'Extend 11 kV east from the old quarter (L), mount a transformer near the shops (T), then 400 V lines and drops (C).', target: { world: 'marker', x: 40, z: -40, label: 'High Street' }, done: (st) => SHOPS.every((id) => powered(st, id)) },
   { id: 'gas', title: 'Cheaper, bigger supply', body: 'Press G and click the gas genset plot south of the diesel station. Connect it with an 11 kV line, then Start it in its card.', target: { world: 'site', id: 'gas' }, done: (st) => !!st.gens.gas && st.gens.gas.status !== 'off' },
   { id: 'trust', title: 'Mind your customers', body: 'Click the Trust chip. Outages, long waits, high prices and unaffordable bills all lower trust.', target: { ui: '#chip-trust' }, done: (st) => !!st.inspected.trust },
 ];
 
 const ENDING2 = {
-  common: ['Millbrook kept growing — and its power kept up.', 'New families on the estate switched on their lights the week they moved in.'],
+  common: ['Millbrook kept growing, and its power kept up.', 'New families on the estate switched on their lights the week they moved in.'],
   sustainable: 'Fair prices, a healthy margin and power through the heat: Millbrook trusts its utility.',
   reliable: 'The lights stayed on for nearly everyone, and the books balanced.',
   hardwon: 'It wasn’t easy, but the town grew without being left in the dark.',
-  decisions: { gas: 'The gas genset gave the town headroom — and cut the fuel bill.', upgraded: 'You upgraded the old transformer before it failed.', fair: 'Low-income families paid a fair share, not a crushing one.' },
-  next: 'Next: the Ironvale corridor — industry needs megawatts, and that means high voltage.',
+  decisions: { gas: 'The gas genset gave the town spare power and cut the fuel bill.', upgraded: 'You upgraded the old transformer before it failed.', fair: 'Low-income families paid a fair share, not a crushing one.' },
+  next: 'Next: the Ironvale corridor. Industry needs megawatts, and that means high voltage.',
 };
 
 const ui = {
@@ -446,15 +449,15 @@ const ui = {
   ending: ENDING2,
   endTitle: 'Millbrook grows, fairly',
   demandNote: 'Homes peak in the evening (and a little at breakfast); shops and offices by day; the clinic and the water pumps never stop. On hot days homes and shops use 30 % more.',
-  financeNote: 'Higher tariffs raise revenue but lower that class’s trust; prices also nudge demand down a little. Construction is capital spending — it isn’t in the daily operating result.',
+  financeNote: 'Higher tariffs raise revenue but lower that class’s trust; prices also nudge demand down a little. Building costs are paid up front, so they aren’t in the daily result.',
   briefing: {
-    text: 'Millbrook’s little diesel utility is yours. The old quarter is already wired — but its transformer is undersized, the High Street wants power, and new families arrive on days 2 and 3.',
+    text: 'Millbrook’s little diesel utility is yours. The old quarter is already wired, but its transformer is too small, the High Street wants power, and new families arrive on days 2 and 3.',
     goals: ['Get the old quarter through tonight’s peak', 'Connect the High Street and the new estate', 'Two positive daily statements, fair low-income bills, trust ≥ 60', 'Ride out the day-3 heat wave'],
     newSystems: ['Customer classes and <b>tariffs</b>', 'Daily <b>statements</b> (operating result)', '<b>Affordability</b> and <b>trust</b>', 'Population <b>growth</b> and a second generator'],
   },
   failCause: {
     trust: { title: 'Licence revoked', body: 'Public trust collapsed and the regulator replaced you as Millbrook’s utility.', tip: 'Watch the Trust panel: fix outages first, connect new homes quickly, and don’t raise household tariffs too far.' },
-    clinic: { title: 'A critical service went dark too long', body: 'The clinic or the water pumps were without power for 6 hours.', tip: 'Protect critical services: keep headroom on their transformer and set the shed policy to Protect critical.' },
+    clinic: { title: 'A critical service went dark too long', body: 'The clinic or the water pumps were without power for 6 hours.', tip: 'Protect critical services: leave spare capacity on their transformer and set the shed policy to Protect critical.' },
   },
   handles: ['peakOk', 'peakMissed', 'heatForecast', 'stormForecast', 'stormDamage', 'heatOk', 'heatMissed', 'tariff', 'upgraded'],
   onEvent(e, u) {
@@ -480,7 +483,7 @@ const ui = {
       case 'stormDamage':
         u.audio.play('trip');
         u.say('stormDamage');
-        u.hud.alert({ id: 'storm', level: 'critical', title: 'Storm damage — 11 kV span down', text: 'Customers beyond it are dark. Send the repair crew.', actions: [{ label: 'Send repair crew', primary: true, fn: () => u.cmd({ type: 'repair', target: e.target }).ok && u.hud.dismiss('storm') }, u.focusAct(e.target)] });
+        u.hud.alert({ id: 'storm', level: 'critical', title: 'Storm damage: an 11 kV line is down', text: 'Customers beyond it are dark. Send the repair crew.', actions: [{ label: 'Send repair crew', primary: true, fn: () => u.cmd({ type: 'repair', target: e.target }).ok && u.hud.dismiss('storm') }, u.focusAct(e.target)] });
         u.learnOnce('storm', { focus: () => u.focus({ kind: 'edge', id: e.target }) });
         break;
       case 'heatOk':
@@ -488,7 +491,7 @@ const ui = {
         u.say('heatOk');
         break;
       case 'heatMissed':
-        u.hud.alert({ id: 'heat', level: 'warn', title: 'Heat wave: objective missed', text: `Reliability was ${e.rel.toFixed(1)}% or a critical service went dark. It can’t be retried — focus on the other goals.`, ttl: 9000 });
+        u.hud.alert({ id: 'heat', level: 'warn', title: 'Heat wave: objective missed', text: `Reliability was ${e.rel.toFixed(1)}% or a critical service went dark. It can’t be retried, so focus on the other goals.`, ttl: 9000 });
         break;
       case 'newCustomer': {
         if (!u.app.nudges.growth) {
@@ -566,6 +569,19 @@ export default {
   chips: ['credits', 'cash', 'demand', 'gen', 'fuel', 'powered', 'trust', 'afford', 'rel'],
   objectives,
   weather: { 3: { heat: true, label: 'Heat wave' } },
+  events: {
+    count: [3, 4],
+    avoidH: [[44, 72]], // storm night and heat wave (day 2 evening to day 3)
+    pool: [
+      { key: 'flood', kind: 'flood', weight: 2, windowH: [24, 42], warnH: 4, durH: 3, params: { area: 'the river flats and the west side of the old quarter', zone: { poly: [[-136, -46], [-42, -46], [-42, 68], [-136, 68]] } } },
+      { key: 'xfmr', kind: 'xfmrFail', weight: 2, windowH: [74, 128], warnH: 3 },
+      { key: 'bazaar', kind: 'festival', weight: 2, windowH: [74, 130], atHour: 18, warnH: 18, durH: 5, params: { name: 'The Friday bazaar', text: 'High Street is hosting the Friday night bazaar: stalls, music and food until late.', ids: ['s1', 's2', 's3', 's4', 'o1'], mult: 1.7, startH: 18, at: { x: 40, z: -40 }, say: 'High Street is throwing the Friday bazaar. The traders are counting on us!', goodNews: 'Bazaar crowds enjoy a bright night on High Street.', badNews: 'Blackout spoils the Friday bazaar.' } },
+      { key: 'annexe', kind: 'arrivals', weight: 1, windowH: [76, 112], warnH: 8, durH: 12, params: { group: 'annexe', at: { x: -8, z: 108 }, title: 'A school annexe is opening', text: 'Millbrook School is opening a new annexe next door for the growing number of children.', say: 'The school’s new annexe opens soon. The children will need lights and heating.', goodNews: 'School annexe opens with power on day one.', badNews: 'New school annexe opens without power.' } },
+      { key: 'nightTariff', kind: 'request', weight: 1, windowH: [26, 120], params: { who: 'maya', title: 'A cheaper tariff for shift workers', text: 'Night-shift workers at Millbrook Works ask for a lower home tariff. Money is tight for many families.', options: [{ label: 'Lower the home tariff by 5 ¢', yes: true, tariff: { home: -0.05 }, rep: 5, trust: 3, cls: ['home'], note: 'Less revenue from homes, but people will appreciate it.', news: 'Utility cuts home tariff after workers ask for help.' }, { label: 'Keep prices as they are', rep: -3, note: 'You keep the revenue. Some people will be disappointed.' }] } },
+      { key: 'lights', kind: 'request', weight: 1, windowH: [26, 120], params: { who: 'maya', title: 'Street lights for Mill Row', text: 'Families on Mill Row say the lane is pitch dark at night and children walk home from school there. They ask you to put up street lights.', options: [{ label: 'Put up street lights · 450 ¢', cost: 450, yes: true, rep: 6, trust: 4, cls: ['lowincome'], note: 'A small cost for a safer street.', news: 'New street lights make Mill Row safer.' }, { label: 'Not right now', rep: -3, note: 'You save the money. The lane stays dark.' }] } },
+    ],
+    protests: { outages: 4, credit: 800 },
+  },
   demandMod,
   prebuilt: PREBUILT,
   init(state) {
@@ -595,7 +611,7 @@ export default {
       if (i % 30 === 0) dropAll();
       const g = sim.state.gens.gen;
       if (g.fuel < 60 && !sim.state.orders.some((o) => o.item === 'fuel')) sim.cmd({ type: 'order', item: 'fuel' });
-      for (const e of sim.drainEvents()) if (e.type === 'stormDamage') sim.cmd({ type: 'repair', target: e.target });
+      for (const e of drainAndRespond(sim)) if (e.type === 'stormDamage') sim.cmd({ type: 'repair', target: e.target });
     }
   },
   ui,

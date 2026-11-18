@@ -11,9 +11,19 @@ import { weatherAt } from './weather.js';
 import { initEconomy, accrueMinute, hourlyEconomy, midnight } from './economy.js';
 import { rng, fnv, canonical } from './rng.js';
 import { runSteps } from './steps.js';
+import { initEvents, eventsTick, eventDemandMult, eventCommands, withCommunity, crewFactor } from './events.js';
 import STAGE1 from '../missions/stage1.js';
 
 export const POWERED = new Set(['on', 'partial']);
+/** Reliability (%) over the last `hours` hours (rolling), plus the current hour. */
+export function rollingRel(state, hours = 48) {
+  const s = state.stats;
+  const ring = (s.relRing || []).slice(-hours);
+  const p = ring.reduce((a, r) => a + r[0], 0) + (s.relCur?.[0] || 0);
+  const t = ring.reduce((a, r) => a + r[1], 0) + (s.relCur?.[1] || 0);
+  return { pct: t ? (p / t) * 100 : 100, hours: ring.length };
+}
+const DEFAULT_SPEC = [['coverage', 'Coverage', 30], ['reliability', 'Reliability', 30], ['restoration', 'Restoration', 15], ['finance', 'Finance', 15], ['efficiency', 'Efficiency', 10]];
 
 function mkGen(def, bal) {
   const T = srcType(bal, def.type);
@@ -33,7 +43,7 @@ function mkGen(def, bal) {
   return g;
 }
 
-function initialState(seed, mission) {
+function initialState(seed, mission, withEvents = true) {
   const { map, bal } = mission;
   const nodes = {};
   const gens = {};
@@ -45,7 +55,7 @@ function initialState(seed, mission) {
   const cust = {};
   for (const c of map.customers) {
     cust[c.id] = { status: 'unconnected', demand: 0, served: 0, supplyFrac: 0, kWhToday: 0, kWhTotal: 0, poweredMin: 0, outMin: 0, everPowered: false, connected: false, dropped: false, xfmr: null };
-    if (c.appearAt != null) cust[c.id].active = false;
+    if (c.appearAt != null || c.surprise) cust[c.id].active = false;
   }
   const st = {
     v: 1,
@@ -83,15 +93,19 @@ function initialState(seed, mission) {
   // Stage 1 compatibility: the single diesel generator is also reachable as `state.gen`.
   if (gens.gen) st.gen = gens.gen;
   if (mission.systems?.economy) initEconomy(st, bal, mission);
-  st.weather = weatherAt(seed, st.clock, mission.weather);
+  // each stage's weather is designed (its storms and calm days are part of the lesson), so it
+  // doesn't vary with the run seed; the seed varies the run events instead
+  st.weatherSeed = mission.weatherSeed ?? 1337;
+  st.weather = weatherAt(st.weatherSeed, st.clock, mission.weather);
   mission.init?.(st);
+  if (withEvents) initEvents(st, mission, bal);
   return st;
 }
 
-export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map: mapOverride } = {}) {
+export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map: mapOverride, events: withEvents = true } = {}) {
   if (balOverride || mapOverride) mission = { ...mission, bal: balOverride || mission.bal, map: mapOverride || mission.map };
   const { bal, map } = mission;
-  const state = initialState(seed, mission);
+  const state = initialState(seed, mission, withEvents);
   const log = [];
   let events = [];
   let prevPowered = new Set();
@@ -103,7 +117,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
   };
   const newId = (p) => `${p}${state.nextId++}`;
   const custById = (id) => map.customers.find((c) => c.id === id);
-  const ctx = { demandMod: mission.demandMod ? (st, c, kw, hour, w) => mission.demandMod(st, c, kw, hour, w, bal) : null };
+  const baseMod = mission.demandMod ? (st, c, kw, hour, w) => mission.demandMod(st, c, kw, hour, w, bal) : null;
+  const ctx = { demandMod: (st, c, kw, hour, w) => (baseMod ? baseMod(st, c, kw, hour, w) : kw) * eventDemandMult(st, c) };
 
   function resolveAndDiff() {
     solve(state, bal, ctx);
@@ -315,6 +330,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (!T.dispatch && !T.reservoir) return { ok: false, reason: 'notDispatchable' };
       if (g.retired) return { ok: false, reason: 'retired' };
       if (g.status === 'running' || g.status === 'starting') return { ok: false, reason: 'alreadyRunning' };
+      if (g.status === 'tripped' && g.tripUntil > state.clock) return { ok: false, reason: 'unitTripped' };
       if (T.fuel === 'tank' && g.fuel <= 0) return { ok: false, reason: 'noFuel' };
       g.status = 'starting';
       g.rampMin = 0;
@@ -441,10 +457,12 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (!n && !e && !g) return { ok: false, reason: 'badTarget' };
       if (!broken) return { ok: false, reason: 'nothingToRepair' };
       if (crewBusyWith(c.target)) return { ok: false, reason: 'alreadyDispatched' };
+      const free = (n || e)?.disaster; // disaster damage: labour paid by the regional emergency fund
       if (state.inv.kits < 1) return { ok: false, reason: 'noKits' };
-      if (state.credits < bal.costs.repairLabour) return { ok: false, reason: 'noCredits' };
+      if (!free && state.credits < bal.costs.repairLabour) return { ok: false, reason: 'noCredits' };
       state.inv.kits -= 1;
-      spend(bal.costs.repairLabour);
+      if (!free) spend(bal.costs.repairLabour);
+      if (free) (n || e).disaster = false;
       if (n?.overheat) state.fault.preDispatched = true;
       return dispatch({ type: 'repair', target: c.target });
     },
@@ -503,11 +521,13 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     emit,
     spend,
     newId,
+    mission,
     resolve: () => resolveAndDiff(),
     dispatchCrew: (job) => dispatch(job),
     crewBusyWith: (id) => crewBusyWith(id),
   };
   for (const [k, fn] of Object.entries(mission.commands || {})) handlers[k] = (c) => fn(c, api);
+  if (state.ev) Object.assign(handlers, eventCommands(api));
 
   function firstDispatchable() {
     return Object.keys(state.gens).find((id) => srcType(bal, state.gens[id].type).dispatch) || Object.keys(state.gens)[0];
@@ -547,7 +567,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     const s = siteOf(id);
     // roads are roughly orthogonal: Manhattan distance from the depot
     const d = Math.abs(s.x - map.depot.x) + Math.abs(s.z - map.depot.z);
-    return Math.max(10, Math.round((d / bal.crew.speedMPerH) * 60));
+    return Math.max(10, Math.round((d / bal.crew.speedMPerH) * 60 * crewFactor(state)));
   }
 
   function dispatch(job) {
@@ -614,12 +634,12 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
         if (j.type === 'repair') {
           if (isBroken()) {
             j.phase = 'work';
-            j.remain = bal.crew.repairH * 60;
+            j.remain = Math.round(bal.crew.repairH * 60 * crewFactor(state));
             emit('repairStart', { target: j.target });
           } else j.phase = 'standby';
         } else {
           j.phase = 'work';
-          j.remain = bal.crew.maintainH * 60;
+          j.remain = Math.round(bal.crew.maintainH * 60 * crewFactor(state));
           if (g) g.servicing = true;
           else n.state = 'maint';
           emit('maintStart', { target: j.target });
@@ -631,7 +651,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     if (j.phase === 'standby') {
       if (isBroken()) {
         j.phase = 'work';
-        j.remain = bal.crew.repairH * 60;
+        j.remain = Math.round(bal.crew.repairH * 60 * crewFactor(state));
         emit('repairStart', { target: j.target });
       } else if (n && !n.overheat && n.state === 'ok' && state.fault.target !== n.id) {
         cr.job = { ...j, phase: 'return', remain: j.travel };
@@ -665,6 +685,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
           } else {
             n.state = 'ok';
             n.condition = 100;
+            n.hum = false;
+            n.lastServicedT = state.t;
             if (n.hiddenWear != null) n.hiddenWear = 0;
           }
           state.stats.serviced++;
@@ -809,11 +831,20 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (s.firstLightT != null && (bal.relCountsAll !== false || cs.dropped)) {
         s.custMinTotal++;
         if (on) s.custMinPowered++;
+        s.relCur = s.relCur || [0, 0];
+        s.relCur[1]++;
+        if (on) s.relCur[0]++;
       }
       if (cs.everPowered && !on) cs.outMin++;
       else cs.outMin = 0;
     }
     if (state.ledger) accrueMinute(state, bal);
+    // rolling reliability: customer-minutes powered / connected, per hour, last 48 h
+    if (state.clock % 60 === 0 && s.relCur) {
+      (s.relRing ||= []).push(s.relCur);
+      if (s.relRing.length > 48) s.relRing.shift();
+      s.relCur = [0, 0];
+    }
   }
 
   function growthTick() {
@@ -835,7 +866,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     state.t++;
     state.clock++;
     let needResolve = false;
-    if (state.clock % 60 === 0 || !state.weather) state.weather = weatherAt(state.seed, state.clock, mission.weather);
+    if (state.clock % 60 === 0 || !state.weather) state.weather = weatherAt(state.weatherSeed ?? state.seed, state.clock, mission.weather);
     if (sourceTick()) needResolve = true;
     if (growthTick()) needResolve = true;
 
@@ -860,6 +891,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     state.orders = state.orders.filter((o) => o.arriveT > state.t);
     if (crewTick() === 'resolve') needResolve = true;
     if (mission.director?.(state, api) === 'resolve') needResolve = true;
+    if (eventsTick(state, api, bal)) needResolve = true;
     void needResolve;
 
     // demand → dispatch → route → losses (every tick: demand changes hourly)
@@ -956,7 +988,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     if (state.result) return;
     const prim = mission.objectives.filter((o) => o.primary).every((o) => state.objectives[o.id]);
     if (prim) {
-      const score = mission.score(state, bal);
+      const score = withCommunity(mission.score(state, bal), state, DEFAULT_SPEC);
       state.result = { outcome: 'victory', score, metrics: mission.metrics(state, bal) };
       emit('victory', { score: score.total, ending: score.ending });
     }
@@ -1011,7 +1043,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     canBuildAt: (x, z) => !siteBlocked(state, x, z),
     xfmrRating: (n) => xfmrRating(bal, n),
     save() {
-      return { v: 1, mission: mission.id, seed: state.seed, t: state.t, log: log.slice() };
+      return { v: 1, mission: mission.id, seed: state.seed, t: state.t, log: log.slice(), ...(state.ev ? {} : { events: false }) };
     },
   };
 }
@@ -1020,7 +1052,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
 export function loadSim(save, opts = {}) {
   const mission = opts.mission || STAGE1;
   if (!save || save.v !== 1 || save.mission !== mission.id || !Array.isArray(save.log)) throw new Error('Incompatible save');
-  const sim = createSim({ seed: save.seed, ...opts, mission });
+  const sim = createSim({ seed: save.seed, events: save.events !== false, ...opts, mission });
   for (const [t, c] of save.log) {
     while (sim.state.t < t) if (!sim.tick()) break;
     sim.cmd(c);
