@@ -18,7 +18,7 @@ npm install
 node build.mjs          # → dist/gridforge.html
 npm test                # simulation unit tests (node:test): Stage 1 + campaign
 ```
-Browser regression scripts are Playwright functions run with the page at `?test=1`. Serve `dist/` on port 4173 (`.claude/launch.json`) first.
+Browser regression scripts are Playwright functions run with the page at `?test=1`. Serve `dist/` first with `node serve.mjs` (http://localhost:4173/gridforge.html, local only).
 - `tests/playthrough.js` and `tests/paths.js` cover Stage 1.
 - `tests/campaign.js` drives the campaign shell and each stage's new tools through the real UI.
 - `tests/stages-visual.js` captures review screenshots and fps for Stages 2–5.
