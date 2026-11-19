@@ -8,6 +8,8 @@ import { createWorld } from './render/world.js';
 import { createNetworkView } from './render/network.js';
 import { createFx } from './render/fx.js';
 import { createPeople } from './render/people.js';
+import { createLife } from './render/life.js';
+import { runSteps } from './sim/steps.js';
 import { createHud } from './ui/hud.js';
 import { createInspector } from './ui/inspector.js';
 import { createMenus } from './ui/menus.js';
@@ -92,6 +94,7 @@ let net = createNetworkView(scene, map);
 const fx = createFx(scene);
 const hazards = createHazards(scene);
 let people = createPeople(scene, map);
+let life = createLife(scene, map);
 rig.setMap(map.bounds, M.camera);
 const audio = createAudio();
 const uiEl = document.getElementById('ui');
@@ -820,6 +823,7 @@ const evUI = createEventUI({
   inZone,
   LABEL,
   onNews: (e) => hud.news(e, S_()),
+  mission: () => M,
 });
 function handleEvents(evs) {
   const st = S_();
@@ -1064,6 +1068,7 @@ function schedulePower() {
   const now = performance.now() / 1000;
   for (const c of map.customers) {
     if (!st.cust[c.id]) return;
+    if (c.pvKWp && world.setSolar(c.id, !!st.prosumers?.[c.id]) && st.prosumers?.[c.id] && !cfg.reduceMotion) fx.burst(c.x, 9, c.z, 'light', 14);
     const s = st.cust[c.id].status;
     const on = s === 'on' || s === 'partial';
     const was = app.shown[c.id];
@@ -1389,6 +1394,7 @@ function buildStage(m) {
   world.dispose();
   net.dispose();
   people.dispose();
+  life.dispose();
   M = m;
   map = m.map;
   bal = m.bal;
@@ -1398,6 +1404,7 @@ function buildStage(m) {
   world = createWorld(scene, map);
   net = createNetworkView(scene, map);
   people = createPeople(scene, map);
+  life = createLife(scene, map);
   builtViews.clear();
   rig.setMap(map.bounds, m.camera);
   setupEmitters();
@@ -1428,6 +1435,7 @@ function resetVisuals() {
   }
   for (const c of map.customers) {
     world.setPower(c.id, 'off');
+    world.setSolar(c.id, false);
     world.setActive(c.id, (c.appearAt == null && !c.surprise) || app.sim?.state.cust[c.id]?.active !== false);
   }
   world.setGroupLevel('street-n', 0);
@@ -1767,7 +1775,7 @@ function frame() {
   const tod = app.mode === 'game' ? st.clock % 1440 : app.mode === 'ending' ? 22 * 60 : 19.6 * 60;
   const { dayW } = G.setTimeOfDay(tod, app.mode === 'ending' ? 'night' : null);
   const hz = hazards.update(st, dt, time, { custOf, target: rig.target, dist: rig.dist, reduceMotion: cfg.reduceMotion });
-  if (app.mode === 'game') hazards.weatherLight(G, hz.storm);
+  if (app.mode === 'game') hazards.weatherLight(G, hz.storm, hz.flash);
   const nightK = 1 - dayW * 0.7;
   app.nightK = nightK;
 
@@ -1776,6 +1784,7 @@ function frame() {
   net.update(st, { overlay: app.mode === 'game' ? app.overlay : 'flow', time, dt, reduceMotion: cfg.reduceMotion, cb: cfg.cbPatterns, bal, night: app.nightK });
   world.update(dt, time, nightK, cfg.reduceMotion);
   people.update(st, dt, time, nightK, cfg.reduceMotion, siteOf);
+  life.update(st, dt, time, nightK, cfg.reduceMotion);
   if (Object.keys(st.built || {}).length !== builtViews.size) syncBuilt();
   let fossilOut = 0;
   let fossilRated = 0;
@@ -1855,6 +1864,8 @@ if (TEST) {
     hash: () => app.sim.hash(),
     cmd: (c) => app.sim.cmd(c),
     fps: () => fps,
+    life: () => life.counts(),
+    lifeOff: (off) => (life.root.visible = !off),
     scene: () => scene,
     G: () => G,
     renderStats: () => ({ ...G.renderer.info.render, programs: G.renderer.info.programs?.length, geometries: G.renderer.info.memory.geometries }),
@@ -1866,7 +1877,7 @@ if (TEST) {
       return M;
     },
     startStage: (n, save = null) => startGame(STAGES[n - 1], save),
-    refBuild: () => M.refBuild?.(app.sim),
+    refBuild: () => (M.refBuild ? M.refBuild(app.sim) : M.map.reference && runSteps(app.sim.cmd, app.sim.state, M.map.reference)),
     panel: (k) => select({ kind: k }),
     jumpToEnding: (n) => jumpToEnding(n ? STAGES[n - 1] : M),
     focusAt: (x, z, d) => rig.flyTo(x, z, d),
@@ -1911,7 +1922,7 @@ if (TEST) {
       d.warnAt = st.clock + Math.round(h * 60);
       d.hitAt = d.warnAt + warn;
       d.endAt = d.hitAt + dur;
-      if (d.kind === 'festival') d.p = { ...d.p, startH: Math.floor((d.hitAt % 1440) / 60) };
+      if (d.kind === 'festival' || d.kind === 'heat') d.p = { ...d.p, startH: Math.floor((d.hitAt % 1440) / 60) };
       return { warn: d.warnAt / 60, hit: d.hitAt / 60, end: d.endAt / 60 };
     },
   };

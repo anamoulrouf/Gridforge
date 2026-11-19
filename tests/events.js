@@ -40,13 +40,23 @@ async (page) => {
   const scenarios = [
     { n: 1, seed: 1, key: 'lane', name: 's1-arrivals' },
     { n: 1, seed: 1, key: 'wedding', name: 's1-wedding', reuse: true },
-    { n: 2, seed: 1, key: 'lights', name: 's2-request', reuse: false },
-    { n: 2, seed: 1, key: 'flood', name: 's2-flood', act: 'Protect them' },
-    { n: 3, seed: 1, key: 'quake', name: 's3-quake' },
-    { n: 3, seed: 2, key: 'coalTrip', name: 's3-blackout' },
-    { n: 4, seed: 1, key: 'tsunami', name: 's4-tsunami', act: 'Protect them' },
-    { n: 5, seed: 1, key: 'cyclone', name: 's5-cyclone' },
-    { n: 5, seed: 3, key: 'lights', name: 's5-festival' },
+    { n: 1, seed: 2, key: 'storm', name: 's1-storm' },
+    { n: 1, seed: 2, key: 'mayor', name: 's1-vip', reuse: true },
+    { n: 2, seed: 3, key: 'lights', name: 's2-request' },
+    { n: 2, seed: 2, key: 'flood', name: 's2-flood', act: 'Protect them' },
+    { n: 2, seed: 3, key: 'theft', name: 's2-theft' },
+    { n: 3, seed: 4, key: 'quake', name: 's3-quake' },
+    { n: 3, seed: 3, key: 'coalTrip', name: 's3-blackout' },
+    { n: 3, seed: 2, key: 'heat', name: 's3-heat' },
+    { n: 4, seed: 2, key: 'tsunami', name: 's4-tsunami', act: 'Protect them' },
+    { n: 4, seed: 4, key: 'inspection', name: 's4-inspection', reuse: true },
+    { n: 5, seed: 3, key: 'cyclone', name: 's5-cyclone' },
+    { n: 5, seed: 1, key: 'lights', name: 's5-festival', reuse: true },
+    // round 8: new event kinds
+    { n: 3, seed: 1, key: 'wildfire', name: 's3-wildfire', act: 'Protect them' },
+    { n: 3, seed: 3, key: 'landslide', name: 's3-landslide' },
+    { n: 4, seed: 1, key: 'dust', name: 's4-dust' },
+    { n: 5, seed: 1, key: 'cyber', name: 's5-cyber' },
   ];
   for (const sc of scenarios) {
     if (!sc.reuse) {
@@ -95,6 +105,24 @@ async (page) => {
     }
     out[sc.name] = r;
   }
+  // today's side quests in the objectives panel, and town life at rush hour
+  out.quests = await page.evaluate(() => (__gf.state().q?.list || []).map((q) => `${q.key}:${q.status}`));
+  out.questRows = await page.locator('#objectives .obj.quest').count();
+  await page.locator('#objectives').screenshot({ path: 'review/ev-quests.jpg', type: 'jpeg', quality: 82 });
+  const qRow = page.locator('#objectives .obj.quest').first();
+  if (await qRow.count()) {
+    await qRow.hover();
+    await page.waitForTimeout(400);
+    out.questCard = (await page.locator('#objcard').innerText()).slice(0, 120);
+    await page.screenshot({ path: 'review/ev-quest-card.jpg', type: 'jpeg', quality: 80, clip: { x: 0, y: 60, width: 760, height: 620 } });
+    await page.mouse.move(900, 500);
+  }
+  await page.evaluate(() => { const c = __gf.state().clock; __gf.skipHours(((8.2 * 60 - (c % 1440) + 1440) % 1440) / 60); });
+  await handleModals('life');
+  await page.evaluate(() => __gf.focusAt(60, 60, 170));
+  await page.waitForTimeout(2600);
+  out.life = await page.evaluate(() => __gf.life());
+  await page.screenshot({ path: 'review/ev-life-rush.jpg', type: 'jpeg', quality: 80 });
   // Gazette and Community panels (on the last stage)
   await page.locator('#btn-news').click();
   await page.waitForTimeout(400);

@@ -4,6 +4,7 @@ import { h, icon, esc } from './dom.js';
 import { S, fmt } from '../data/strings.js';
 import { CAST } from '../data/dialogue.js';
 import { STAGES } from '../missions/index.js';
+import { questView } from '../sim/quests.js';
 
 export function createHud(ui, labelsEl, cb) {
   // ---------------------------------------------------------------- top bar
@@ -24,6 +25,8 @@ export function createHud(ui, labelsEl, cb) {
     co2: chip('co2', 'cloud', 'CO₂ today', { title: 'Emissions so far today from fossil generation.' }),
     mix: chip('mix', 'bolt', 'Supply', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Generation by source. Click for dispatch order and the weather forecast.', bar: true }),
     rep: chip('rep', 'heart', 'Reputation', { button: true, onclick: () => cb.onPanel?.('community'), title: 'What people think of your utility (0 to 100). It rises when the lights stay on and you treat people fairly. Click for details.', bar: true }),
+    reserve: chip('reserve', 'shield', 'Reserve', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Fast reserve: spare power your running engines and batteries can add within seconds, against the biggest single unit running now. Green means a trip of that unit would be caught.', bar: true }),
+    tanks: chip('tanks', 'fuel', 'Diesel', { title: 'Diesel left in all the tanks, and roughly how long it lasts at the current rate. The tanker refills them every morning at 07:00.', bar: true }),
     weather: chip('weather', 'sun', 'Weather', { button: true, onclick: () => cb.onPanel?.('mix'), title: 'Sun, cloud and wind now. Click for the 24 h forecast.' }),
   };
   let M = STAGES[0];
@@ -89,11 +92,22 @@ export function createHud(ui, labelsEl, cb) {
   function renderCard() {
     const st = card.state;
     if (!st || !card.id) return;
-    const o = M.objectives.find((x) => x.id === card.id);
-    if (!o) return;
-    const gd = o.guide(st, card.bal, { xfmrName: cb.xfmrName, srcName: cb.srcName });
-    const r = o.eval(st, card.bal);
-    const done = o.live ? r.done : st.objectives[card.id];
+    let gd;
+    let done;
+    if (card.id.startsWith('q:')) {
+      const q = st.q?.list.find((x) => x.id === card.id.slice(2));
+      if (!q) return;
+      const v = questView(st, q, card.bal);
+      done = q.status === 'done';
+      const cw = M.cast?.[q.who] || CAST[q.who] || CAST.advisor;
+      gd = { title: q.title, why: `${esc(q.text)} <i>(${esc(cw.name)})</i>`, steps: v.how, now: [...v.now, { cls: 'info', html: q.status === 'open' ? `Reward: ${v.reward} · ${fmt.dur(v.left)} left` : q.status === 'done' ? `Earned ${v.reward}` : 'Missed this time. New tasks come every morning.' }], focus: q.goal.id || q.goal.ids ? { sel: { kind: 'building', id: q.goal.id || q.goal.ids[0] } } : null, focusLabel: 'Show me' };
+    } else {
+      const o = M.objectives.find((x) => x.id === card.id);
+      if (!o) return;
+      gd = o.guide(st, card.bal, { xfmrName: cb.xfmrName, srcName: cb.srcName });
+      const r = o.eval(st, card.bal);
+      done = o.live ? r.done : st.objectives[card.id];
+    }
     const html =
       `<div class="oc-head"><span class="oc-state ${done ? 'done' : ''}">${done ? icon('check') + 'Done' : 'To do'}</span>${card.pinned ? '<span class="oc-pin">Pinned · Esc to close</span>' : ''}</div>` +
       `<h4>${esc(gd.title)}</h4><p class="oc-why">${gd.why}</p>` +
@@ -264,6 +278,19 @@ export function createHud(ui, labelsEl, cb) {
       const w = state.weather;
       setChip(chips.weather, `${w.sun > 0.05 ? (w.cloud > 0.6 ? 'Cloudy' : 'Sunny') : 'Night'} · ${w.wind.toFixed(0)} m/s`, w.storm ? 'bad' : w.calm ? 'warn' : '');
     }
+    if (M.chips.includes('reserve')) {
+      const res = f.reserveKW || 0;
+      const big = f.largestKW || 0;
+      setChip(chips.reserve, `${fmt.kw(res).replace(/ kW$/, '')} / ${fmt.kw(big)}`, big <= 0 ? '' : res + 1 >= big ? 'good' : res >= big * 0.6 ? 'warn' : 'bad', big > 0 ? (res / big) * 100 : 0);
+    }
+    if (M.chips.includes('tanks')) {
+      const tanks = Object.values(state.gens).filter((x) => x.fuel != null);
+      const tot = tanks.reduce((a, x) => a + x.fuel, 0);
+      const cap = tanks.reduce((a, x) => a + (bal.sourceTypes?.[x.type]?.tankMax ?? 400), 0);
+      const burn = tanks.reduce((a, x) => a + (x.outKW || 0), 0);
+      const hrs = burn > 1 ? (tot * 20) / burn : null;
+      setChip(chips.tanks, `${Math.round(tot)} u${hrs != null ? ' · ' + Math.floor(hrs) + ' h' : ''}`, hrs != null && hrs < 6 ? 'bad' : hrs != null && hrs < 14 ? 'warn' : '', (tot / Math.max(1, cap)) * 100);
+    }
     const s = state.stats;
     const rel = s.custMinTotal > 0 ? (s.custMinPowered / s.custMinTotal) * 100 : null;
     setChip(chips.rel, rel == null ? 'Not yet' : fmt.pct(rel), rel != null && rel < 80 ? 'warn' : '');
@@ -280,7 +307,10 @@ export function createHud(ui, labelsEl, cb) {
       return { o, r, done };
     });
     const cur = rows.find((x) => x.o.primary && !x.done);
-    const key = rows.map((x) => `${x.o.id}${x.done ? 1 : 0}${x.r.progress ? x.r.progress.join('/') : ''}`).join('|') + (cur ? cur.o.id : '');
+    const today = Math.floor(state.clock / 1440) + 1;
+    const qs = (state.q?.list || []).filter((q) => q.day === today || q.status === 'open');
+    const qKey = qs.map((q) => `${q.id}${q.status}${Math.ceil(Math.max(0, q.until - state.clock) / 60)}`).join(',');
+    const key = rows.map((x) => `${x.o.id}${x.done ? 1 : 0}${x.r.progress ? x.r.progress.join('/') : ''}`).join('|') + (cur ? cur.o.id : '') + qKey;
     if (key !== lastObjKey) {
       lastObjKey = key;
       objList.innerHTML = '';
@@ -306,6 +336,23 @@ export function createHud(ui, labelsEl, cb) {
           ),
         );
       });
+      if (qs.length) {
+        objList.append(h('div', { class: 'sep' }), h('div', { class: 'obj-today', html: `${icon('star')}Today’s tasks` }));
+        for (const q of qs) {
+          const left = Math.max(0, q.until - state.clock);
+          const v = questView(state, q, bal);
+          objList.append(
+            h(
+              'div',
+              { class: `obj quest ${q.status === 'done' ? 'done' : q.status === 'failed' ? 'missed' : ''} ${card.id === 'q:' + q.id ? 'hover' : ''}`, tabindex: '0', role: 'button', 'data-obj': 'q:' + q.id, 'aria-describedby': 'objcard', 'aria-label': `Task: ${q.title}. ${q.status === 'open' ? `Reward ${v.reward}.` : q.status}` },
+              h('div', { class: 'box', html: q.status === 'done' ? icon('check') : '' }),
+              h('div', { style: { flex: 1 } }, q.title, h('div', { class: 'q-reward', text: q.status === 'open' ? v.reward : q.status === 'done' ? 'Done' : 'Missed' })),
+              q.status === 'open' ? h('span', { class: 'prog', text: left >= 60 ? `${Math.ceil(left / 60)} h` : `${left} min` }) : null,
+              h('span', { class: 'more', html: icon('info') }),
+            ),
+          );
+        }
+      }
       if (card.id) card.row = objList.querySelector(`[data-obj="${card.id}"]`);
     }
     card.state = state;
@@ -354,7 +401,7 @@ export function createHud(ui, labelsEl, cb) {
 
   // ---------------------------------------------------------------- comms
   function say(who, text) {
-    const c = CAST[who] || CAST.advisor;
+    const c = M.cast?.[who] || CAST[who] || CAST.advisor;
     const el = h('div', { class: 'msg glass' }, h('div', { class: 'avatar', style: { background: c.color }, text: c.initials }), h('div', {}, h('div', { class: 'who', html: `<b>${esc(c.name)}</b>${esc(c.role)}` }), h('p', { text })));
     comms.append(el);
     while (comms.children.length > 3) comms.firstElementChild.remove();

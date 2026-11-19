@@ -232,7 +232,7 @@ export function createMenus(ui) {
     const who = cast || { name: 'Local residents', role: 'Community', color: '#d9a35b', initials: 'LR' };
     const m = modal(
       [
-        h('div', { class: `kicker ${ch.kind === 'protest' ? 'warn' : 'info'}`, text: ch.kind === 'protest' ? 'Protest' : 'Community request' }),
+        h('div', { class: `kicker ${ch.kind === 'request' || ch.kind === 'story' ? 'info' : 'warn'}`, text: ch.label || (ch.kind === 'protest' ? 'Protest' : ch.kind === 'warning' ? 'Police warning' : ch.kind === 'story' ? 'Your decision' : 'Community request') }),
         h('div', { class: 'choice-who' }, h('div', { class: 'avatar', style: { background: who.color }, text: who.initials }), h('div', { html: `<b>${esc(who.name)}</b><span>${esc(who.role)}</span>` })),
         h('h2', { text: ch.title }),
         h('p', { class: 'choice-text', text: ch.text }),
@@ -356,7 +356,9 @@ export function createMenus(ui) {
   // ---------------------------------------------------------------- campaign (stage select)
   function campaign({ stages, onPick }) {
     const grid = h('div', { class: 'stages' });
+    const CHAPTERS = { 1: 'Chapter I · Building the grid', 6: 'Chapter II · Grids of the world' };
     for (const st of stages) {
+      if (stages.length > 5 && CHAPTERS[st.n]) grid.append(h('div', { class: 'chapter', text: CHAPTERS[st.n] }));
       const tile = h(
         'div',
         { class: `stage-tile ${st.unlocked ? '' : 'locked'}` },

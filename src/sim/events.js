@@ -23,8 +23,10 @@ export function initEvents(state, mission, bal) {
     stats: { hits: 0, avoided: 0, restoredFast: 0, restoredSlow: 0, festivalsLit: 0, festivalsDark: 0, requestsYes: 0, requestsNo: 0, protests: 0 },
   };
   state.ev = ev;
+  // story beats: fixed moments in each stage's script (lines from a named character, or a choice)
+  ev.beats = (mission.story || []).map((b, i) => ({ id: 'story' + (i + 1), i, at: (b.day - 1) * 1440 + b.hour * 60, done: (b.day - 1) * 1440 + b.hour * 60 <= state.clock }));
   const pool = (E.pool || []).filter(Boolean);
-  if (!pool.length) return;
+  if (!pool.length && !(E.fixed || []).length) return;
   const r = rng((state.seed ^ parseInt(fnv(mission.id), 16)) >>> 0);
   const [lo, hi] = E.count || [2, 3];
   const n = lo + Math.floor(r() * (hi - lo + 1));
@@ -53,6 +55,8 @@ export function initEvents(state, mission, bal) {
       break;
     }
   }
+  // scripted entries every run gets (e.g. Highvale's ice storm on the pass)
+  for (const f of E.fixed || []) placed.push({ ...f, hitH: f.hitH, fixed: true });
   placed.sort((a, b) => a.hitH - b.hitH);
   ev.deck = placed.map((p, i) => ({
     id: 'ev' + (i + 1),
@@ -64,6 +68,7 @@ export function initEvents(state, mission, bal) {
     endAt: (p.hitH + (p.durH ?? 0)) * H,
     phase: 'pending',
     damaged: [],
+    ...(p.fixed ? { fixed: true } : {}),
   }));
 }
 
@@ -99,7 +104,7 @@ export function rep(state, d, why) {
   if (why) ev.repLast = d;
 }
 
-function news(state, api, text, tone = 'info') {
+export function news(state, api, text, tone = 'info') {
   state.ev.news.push({ t: state.t, clock: state.clock, text, tone });
   if (state.ev.news.length > 30) state.ev.news.shift();
   api.emit('news', { text, tone });
@@ -110,7 +115,7 @@ export function eventDemandMult(state, c) {
   const ev = state.ev;
   if (!ev) return 1;
   let m = 1;
-  for (const d of ev.deck) if (d.phase === 'active' && d.kind === 'festival' && d.ids?.includes(c.id)) m *= d.p.mult ?? 1.6;
+  for (const d of ev.deck) if (d.phase === 'active' && (d.kind === 'festival' || d.kind === 'heat') && d.ids?.includes(c.id)) m *= d.p.mult ?? 1.6;
   return m;
 }
 
@@ -213,7 +218,7 @@ const KINDS = {
         }
       }
       damage(state, api, d, liveXfmrs(state, d.p.zone));
-      if (d.kind === 'tsunami') damage(state, api, d, pickDamage(state, d, linesIn(state, (m) => inZone(m, d.p.zone)), 0.5, d.p.maxLines ?? 3));
+      if (d.kind === 'tsunami' || d.kind === 'wildfire') damage(state, api, d, pickDamage(state, d, linesIn(state, (m) => inZone(m, d.p.zone)), d.kind === 'wildfire' ? 0.35 : 0.5, d.p.maxLines ?? (d.kind === 'wildfire' ? 2 : 3)));
       api.emit('evHit', { id: d.id, kind: d.kind, damaged: d.damaged, zone: d.p.zone, saved: Object.keys(state.nodes).filter((id) => state.nodes[id].state === 'isolated' && inZone(state.nodes[id], d.p.zone)), auto: d.autoIso });
     },
     end(state, api, d) {
@@ -254,8 +259,10 @@ const KINDS = {
         return !g.retired && (g.status === 'running' || g.status === 'starting') && (g.outKW || 0) > 0;
       });
       ids.sort((a, b) => (state.gens[b].outKW || 0) - (state.gens[a].outKW || 0) || (a < b ? -1 : 1));
-      if (!ids.length) return false;
-      d.target = ids[0];
+      // a named event (e.g. "wind farm trip") only trips the sources it is about
+      const pick = d.p.targets ? ids.filter((id) => d.p.targets.includes(id)) : ids;
+      if (!pick.length) return false;
+      d.target = pick[0];
       api.emit('evWarn', { id: d.id, kind: d.kind, target: d.target, inMin: d.hitAt - state.clock });
     },
     hit(state, api, d) {
@@ -353,6 +360,11 @@ function applyOption(state, api, bal, ch, o) {
   ch.done = true;
   ch.picked = o.label;
   if (o.cost) api.spend(o.cost);
+  if (o.gain) state.credits += o.gain;
+  if (o.guard && ch.ev) {
+    const dd = state.ev.deck.find((x) => x.id === ch.ev);
+    if (dd) dd.guarded = true;
+  }
   if (o.rep) rep(state, o.rep, true);
   if (o.trust && state.trust) for (const k of Object.keys(state.trust)) if (!o.cls || o.cls.includes(k)) state.trust[k] = clamp(state.trust[k] + o.trust, 0, 100);
   if (o.activate) for (const c of api.map.customers) if (c.surprise === o.activate && state.cust[c.id].active === false) {
@@ -479,6 +491,16 @@ export function eventsTick(state, api, bal) {
       }
     }
   }
+  for (const b of ev.beats || []) {
+    if (b.done || state.clock < b.at) continue;
+    b.done = true;
+    const B = api.mission.story?.[b.i];
+    if (!B || (B.when && !B.when(state))) continue;
+    if (B.options) {
+      ev.choices[b.id] = { id: b.id, kind: 'story', who: B.who, title: B.title, text: B.text, options: B.options, until: state.t + (B.waitH ?? 6) * H };
+      api.emit('choice', { id: b.id });
+    } else api.emit('beat', { id: b.id, who: B.who, lines: B.lines });
+  }
   // choices that were never answered count as "ignored"
   for (const ch of Object.values(ev.choices)) {
     if (!ch.done && state.t >= ch.until) {
@@ -500,8 +522,290 @@ export function eventsTick(state, api, bal) {
   return changed;
 }
 
-export const LABEL = { xfmrFail: 'transformer failure', flood: 'flood', tsunami: 'tsunami', quake: 'earthquake', cyclone: 'cyclone', blackout: 'blackout', arrivals: 'new arrivals', festival: 'festival', request: 'request' };
+// thunderstorm: forecast a few hours ahead; lightning and falling branches bring down a line or two
+KINDS.storm = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    const cands = linesIn(state, (m) => !d.p.zone || inZone(m, d.p.zone)).filter((id) => state.edges[id].energized);
+    damage(state, api, d, pickDamage(state, d, cands, d.p.p ?? 0.15, d.p.max ?? 1));
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: d.damaged });
+  },
+  tick(state) {
+    if (state.weather) state.weather = { ...state.weather, cloud: Math.max(state.weather.cloud, 0.95), storm: true, label: 'Thunderstorm' };
+  },
+  end(state, api, d) {
+    api.emit('evEnd', { id: d.id, kind: d.kind });
+  },
+};
+
+// heat wave: everyone turns on fans and air conditioning for an afternoon
+KINDS.heat = {
+  warn(state, api, d) {
+    d.ids = api.map.customers.filter((c) => state.cust[c.id].active !== false && (!d.p.cls || d.p.cls.includes(typeDef(api.bal, c.type).cls))).map((c) => c.id);
+    api.emit('evWarn', { id: d.id, kind: d.kind, ids: d.ids, inMin: d.hitAt - state.clock });
+  },
+  hit: KINDS.festival.hit,
+  tick(state, api, d) {
+    KINDS.festival.tick(state, api, d);
+    if (state.weather) state.weather = { ...state.weather, temp: Math.max(state.weather.temp, 36), heat: true, label: 'Heat wave' };
+  },
+  end(state, api, d) {
+    const frac = d.allMin ? d.onMin / d.allMin : 0;
+    const ok = frac >= 0.95;
+    rep(state, ok ? 4 : -4, true);
+    news(state, api, ok ? d.p.goodNews || 'Fans keep spinning as the town beats the heat.' : d.p.badNews || 'Homes swelter as power fails in the heat.', ok ? 'good' : 'bad');
+    api.emit('evEnd', { id: d.id, kind: d.kind, ok, pct: Math.round(frac * 100) });
+  },
+};
+
+// safety inspection: the regulator checks the network at a set hour; overloads and broken kit count against you
+KINDS.inspection = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    const bad = (x) => x.state === 'fault' || x.state === 'trip' || (x.energized && (x.loadPct || 0) > 100);
+    const issues = [
+      ...Object.keys(state.nodes).filter((id) => state.nodes[id].kind === 'xfmr' && bad(state.nodes[id])),
+      ...Object.keys(state.edges).filter((id) => state.edges[id].kind === 'line' && bad(state.edges[id])),
+    ];
+    const ok = issues.length === 0;
+    const grant = ok ? d.p.grant ?? 400 : 0;
+    if (grant) state.credits += grant;
+    rep(state, ok ? 5 : -4, true);
+    news(state, api, ok ? 'Inspectors give the local grid a clean bill of health.' : `Inspectors find ${issues.length} problem${issues.length === 1 ? '' : 's'} on the local grid.`, ok ? 'good' : 'bad');
+    d.issues = issues;
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: [], ok, issues, grant });
+  },
+};
+
+// cable theft: the police warn you; night guards keep the thieves away, otherwise a line is cut
+KINDS.theft = {
+  warn(state, api, d) {
+    const cands = linesIn(state, (m) => !d.p.zone || inZone(m, d.p.zone)).filter((id) => state.edges[id].tier !== 'HV' && state.edges[id].energized).sort();
+    if (!cands.length) return false;
+    const r = rng((state.seed + d.hitAt * 3 + 5) >>> 0);
+    d.target = cands[Math.floor(r() * cands.length)];
+    const at = mid(state, state.edges[d.target]);
+    const cost = d.p.cost ?? 300;
+    state.ev.choices[d.id] = {
+      id: d.id,
+      ev: d.id,
+      kind: 'warning',
+      who: 'sofia',
+      title: 'Cable thieves are about',
+      text: `The police say a gang is stealing copper cable ${d.p.area ? `around ${d.p.area}` : 'in the area'}. One of your lines there looks like an easy target in about ${Math.max(1, Math.round((d.hitAt - state.clock) / 60))} hours. Night guards would keep them away.`,
+      at,
+      options: [
+        { label: `Hire night guards · ${cost.toLocaleString('en-US')} ¢`, cost, guard: true, note: 'The line stays safe.' },
+        { label: 'Take the risk', note: 'If they strike, the line goes down until your crew fixes it.' },
+      ],
+      until: state.t + Math.max(30, d.hitAt - state.clock - 5),
+    };
+    api.emit('evWarn', { id: d.id, kind: d.kind, target: d.target, inMin: d.hitAt - state.clock, at });
+    api.emit('choice', { id: d.id, at });
+  },
+  hit(state, api, d) {
+    if (d.guarded) {
+      state.ev.stats.avoided++;
+      rep(state, 2, true);
+      news(state, api, 'Night guards scare off cable thieves.', 'good');
+      d.noDamage = true;
+      api.emit('evAvoided', { id: d.id, kind: d.kind, target: d.target });
+      return;
+    }
+    if (state.edges[d.target]?.state === 'ok') damage(state, api, d, [d.target]);
+    if (d.damaged.length) news(state, api, 'Thieves cut a power line overnight.', 'bad');
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: d.damaged, target: d.target });
+  },
+};
+
+// VIP visit: a minister or the mayor tours a district; keep it lit the whole time for a grant
+KINDS.vipVisit = {
+  warn(state, api, d) {
+    const z = d.p.zone;
+    d.ids = api.map.customers.filter((c) => state.cust[c.id].active !== false && state.cust[c.id].dropped && inZone(c, z)).map((c) => c.id);
+    if (!d.ids.length) return false; // nothing of yours to show off there yet
+    api.emit('evWarn', { id: d.id, kind: d.kind, ids: d.ids, inMin: d.hitAt - state.clock });
+  },
+  hit: KINDS.festival.hit,
+  tick: KINDS.festival.tick,
+  end(state, api, d) {
+    const frac = d.allMin ? d.onMin / d.allMin : 0;
+    const ok = frac >= 0.95;
+    const grant = ok ? d.p.grant ?? 300 : 0;
+    if (grant) state.credits += grant;
+    rep(state, ok ? 6 : -6, true);
+    news(state, api, ok ? d.p.goodNews || `${d.p.name || 'The minister'} praises the local grid on a visit.` : d.p.badNews || `Power cut during ${d.p.name ? d.p.name.replace(/^The /, 'the ') : 'the minister'}’s visit.`, ok ? 'good' : 'bad');
+    api.emit('evEnd', { id: d.id, kind: d.kind, ok, pct: Math.round(frac * 100), grant });
+  },
+};
+
+// wildfire: like a flood on dry land; switched-off equipment survives, live kit and lines burn
+KINDS.wildfire = KINDS.flood;
+
+// landslide: an hour of warning (heavy rain on the slopes), then lines and poles in the zone come down
+KINDS.landslide = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, zone: d.p.zone, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    const z = d.p.zone;
+    const cands = [...linesIn(state, (m) => inZone(m, z)), ...liveXfmrs(state, z)];
+    damage(state, api, d, pickDamage(state, d, cands, d.p.p ?? 0.6, d.p.max ?? 2));
+    if (d.damaged.length) news(state, api, `Landslide brings down power lines ${d.p.area ? `near ${d.p.area}` : 'on the hillside'}.`, 'bad');
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: d.damaged, zone: z });
+  },
+  end(state, api, d) {
+    api.emit('evEnd', { id: d.id, kind: d.kind });
+  },
+};
+
+// cyber alert: the regulator warns of hackers probing control systems; patch now, or risk a remote trip
+KINDS.cyberAlert = {
+  warn(state, api, d) {
+    const subs = Object.keys(state.nodes).filter((id) => {
+      const n = state.nodes[id];
+      return n.kind === 'xfmr' && n.state === 'ok' && n.energized;
+    });
+    if (!subs.length) return false;
+    subs.sort((a, b) => (state.nodes[a].ratio === 'HV/MV' ? 0 : 1) - (state.nodes[b].ratio === 'HV/MV' ? 0 : 1) || (state.nodes[b].loadKW || 0) - (state.nodes[a].loadKW || 0) || (a < b ? -1 : 1));
+    d.target = subs[0];
+    const n = state.nodes[d.target];
+    const cost = d.p.cost ?? 600;
+    state.ev.choices[d.id] = {
+      id: d.id,
+      ev: d.id,
+      kind: 'warning',
+      label: 'Security warning',
+      who: 'advisor',
+      title: 'Hackers are probing the control system',
+      text: `The national cyber team says hackers are trying to switch off substations by remote control in this region. Your busiest one looks exposed. They expect an attempt in about ${Math.max(1, Math.round((d.hitAt - state.clock) / 60))} hours.`,
+      at: { x: n.x, z: n.z },
+      options: [
+        { label: `Patch the systems · ${cost.toLocaleString('en-US')} ¢`, cost, guard: true, note: 'Security updates close the gap. Nothing switches off.' },
+        { label: 'Take the risk', note: 'If they get in, it switches off until you reset it.' },
+      ],
+      until: state.t + Math.max(30, d.hitAt - state.clock - 5),
+    };
+    api.emit('evWarn', { id: d.id, kind: d.kind, target: d.target, inMin: d.hitAt - state.clock, at: { x: n.x, z: n.z } });
+    api.emit('choice', { id: d.id, at: { x: n.x, z: n.z } });
+  },
+  hit(state, api, d) {
+    const n = state.nodes[d.target];
+    if (d.guarded || !n || n.state !== 'ok') {
+      if (d.guarded) {
+        state.ev.stats.avoided++;
+        rep(state, 2, true);
+        news(state, api, 'Hackers fail to break into the local grid.', 'good');
+        api.emit('evAvoided', { id: d.id, kind: d.kind, target: d.target });
+      }
+      d.noDamage = true;
+      return;
+    }
+    n.state = 'trip';
+    n.coolUntil = state.t + (d.p.coolMin ?? 15);
+    n.overMin = 0;
+    rep(state, -3, true);
+    news(state, api, 'Hackers switch off a substation by remote control.', 'bad');
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: [], target: d.target, tripped: true });
+  },
+};
+
+// dust or sand storm: panels get covered and lose output until the crew washes them
+KINDS.dustStorm = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    d.dusty = [];
+    for (const id of Object.keys(state.gens).sort()) {
+      const g = state.gens[id];
+      if (g.type !== 'solar' || g.retired) continue;
+      g.dust = Math.max(g.dust || 0, d.p.loss ?? 0.6);
+      d.dusty.push(id);
+    }
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: [], dusty: d.dusty });
+  },
+  tick(state) {
+    if (state.weather) state.weather = { ...state.weather, cloud: Math.max(state.weather.cloud, 0.7), dust: true, label: 'Dust storm' };
+  },
+  end(state, api, d) {
+    const dusty = Object.keys(state.gens).filter((id) => (state.gens[id].dust || 0) > 0).sort();
+    api.emit('evEnd', { id: d.id, kind: d.kind, dusty });
+  },
+};
+
+// price spike: a heat wave abroad sends wholesale prices up for a few hours (Stage 9)
+KINDS.priceSpike = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    d.bought = 0;
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: [] });
+  },
+  tick(state, api, d) {
+    for (const g of Object.values(state.gens)) if (api.bal.sourceTypes?.[g.type]?.market) d.bought += (g.outKW || 0) / 60;
+  },
+  end(state, api, d) {
+    const ok = d.bought < 50;
+    rep(state, ok ? 2 : -1, true);
+    if (ok) news(state, api, 'Utility dodges the price spike: no expensive imports.', 'good');
+    api.emit('evEnd', { id: d.id, kind: d.kind, ok, bought: Math.round(d.bought) });
+  },
+};
+
+// ice storm: freezing rain coats lines in a zone; ice builds on lightly loaded lines and melts off
+// lines carrying at least 60% of their limit (the current warms them). Fully iced lines snap.
+KINDS.iceStorm = {
+  warn(state, api, d) {
+    api.emit('evWarn', { id: d.id, kind: d.kind, zone: d.p.zone, inMin: d.hitAt - state.clock });
+  },
+  hit(state, api, d) {
+    d.lines = linesIn(state, (m) => inZone(m, d.p.zone)).filter((id) => (d.p.tiers || ['HV', 'MV']).includes(state.edges[id].tier));
+    for (const id of d.lines) state.edges[id].ice = state.edges[id].ice || 0;
+    api.emit('evHit', { id: d.id, kind: d.kind, damaged: [], lines: d.lines.slice() });
+  },
+  tick(state, api, d) {
+    if (state.weather) state.weather = { ...state.weather, cloud: Math.max(state.weather.cloud, 0.9), snow: true, label: 'Freezing rain' };
+    const build = 1 / ((d.p.buildH ?? 4) * 60);
+    for (const id of d.lines || []) {
+      const e = state.edges[id];
+      if (!e || e.state === 'fault') continue;
+      const warm = e.energized && (Math.max(e.loadKW || 0, e.srcFlowKW || 0) / (e.ratingKW || 1)) * 100 >= (d.p.meltPct ?? 60);
+      e.ice = Math.max(0, Math.min(1, (e.ice || 0) + (warm ? -build * 1.5 : build)));
+      if (e.ice >= 1) {
+        e.ice = 0;
+        damage(state, api, d, [id]);
+        d.snapped = (d.snapped || 0) + 1;
+        news(state, api, 'Ice snaps a power line on the pass.', 'bad');
+        api.emit('iceSnap', { id: d.id, target: id });
+      } else if (e.ice >= 0.75 && !e.iceWarned) {
+        e.iceWarned = true;
+        api.emit('iceHeavy', { id: d.id, target: id, ice: e.ice });
+      }
+    }
+  },
+  end(state, api, d) {
+    for (const id of d.lines || []) if (state.edges[id]) {
+      state.edges[id].ice = 0;
+      state.edges[id].iceWarned = false;
+    }
+    if (!d.snapped) {
+      rep(state, 3, true);
+      news(state, api, 'Lines on the pass ride out the ice storm.', 'good');
+    }
+    api.emit('evEnd', { id: d.id, kind: d.kind, snapped: d.snapped || 0 });
+  },
+};
+
+export const LABEL = { xfmrFail: 'transformer failure', flood: 'flood', tsunami: 'tsunami', quake: 'earthquake', cyclone: 'cyclone', blackout: 'blackout', arrivals: 'new arrivals', festival: 'festival', request: 'request', storm: 'thunderstorm', heat: 'heat wave', inspection: 'inspection', theft: 'cable theft', vipVisit: 'VIP visit', wildfire: 'wildfire', landslide: 'landslide', cyberAlert: 'cyber attack', dustStorm: 'dust storm', iceStorm: 'ice storm', priceSpike: 'price spike' };
 KINDS.tsunami = KINDS.flood;
+/** Hazards that cover an area and spare switched-off equipment. */
+export const isWet = (kind) => kind === 'flood' || kind === 'tsunami' || kind === 'wildfire';
 
 // ------------------------------------------------------------------ commands
 export function eventCommands(api) {
@@ -513,7 +817,7 @@ export function eventCommands(api) {
       if (!n || n.kind !== 'xfmr') return { ok: false, reason: 'badTarget' };
       if (c.on) {
         if (n.state !== 'isolated') return { ok: false, reason: 'notIsolated' };
-        const wet = state.ev?.deck.some((d) => (d.kind === 'flood' || d.kind === 'tsunami') && d.phase === 'active' && inZone(n, d.p.zone));
+        const wet = state.ev?.deck.some((d) => isWet(d.kind) && d.phase === 'active' && inZone(n, d.p.zone));
         if (wet) return { ok: false, reason: 'stillFlooded' };
         n.state = 'ok';
       } else {
@@ -528,7 +832,7 @@ export function eventCommands(api) {
     protect(c) {
       const n = state.nodes[c.target];
       if (!n || n.kind !== 'xfmr') return { ok: false, reason: 'badTarget' };
-      const ahead = state.ev?.deck.some((d) => (d.kind === 'flood' || d.kind === 'tsunami') && d.phase === 'warned' && inZone(n, d.p.zone));
+      const ahead = state.ev?.deck.some((d) => isWet(d.kind) && d.phase === 'warned' && inZone(n, d.p.zone));
       if (!ahead) return { ok: false, reason: 'noFloodComing' };
       n.protect = c.off ? false : true;
       api.emit('protected', { target: n.id, on: n.protect });
@@ -543,6 +847,13 @@ export function eventCommands(api) {
       state.ev.boostUntil = state.t + 12 * H;
       api.emit('contractors', { until: state.ev.boostUntil, cost });
       return { ok: true };
+    },
+    /** Send the crew to wash dust off a solar park after a dust storm. */
+    cleanPanels(c) {
+      const g = state.gens[c.target];
+      if (!g || !(g.dust > 0)) return { ok: false, reason: 'badTarget' };
+      if (api.crewBusyWith(c.target)) return { ok: false, reason: 'crewBusy' };
+      return api.dispatchCrew({ type: 'clean', target: c.target });
     },
     choose(c) {
       const r = choose(state, api, bal, c);
@@ -568,13 +879,15 @@ export function autoRespond(sim, e) {
   const st = sim.state;
   const d = e.id ? st.ev?.deck.find((x) => x.id === e.id) : null;
   if (e.type === 'evWarn' && e.kind === 'xfmrFail') sim.cmd({ type: 'maintain', target: e.target });
-  if (e.type === 'evWarn' && (e.kind === 'flood' || e.kind === 'tsunami')) for (const id of e.at || []) sim.cmd({ type: 'protect', target: id });
+  if (e.type === 'evWarn' && isWet(e.kind)) for (const id of e.at || []) sim.cmd({ type: 'protect', target: id });
   if (e.type === 'evWarn' && e.kind === 'blackout') for (const id in st.gens) if (id !== e.target && st.gens[id].status === 'off') sim.cmd({ type: 'startGen', target: id });
   if (e.type === 'evHit') {
     if ((e.damaged || []).length > 1) sim.cmd({ type: 'contractors' });
     for (const id of e.damaged || []) sim.cmd({ type: 'repair', target: id });
     for (const id of e.ids || []) if (e.kind === 'arrivals') sim.cmd({ type: 'drop', building: id });
   }
+  if (e.type === 'iceSnap') sim.cmd({ type: 'repair', target: e.target });
+  if (e.type === 'evEnd' && e.kind === 'dustStorm') for (const id of e.dusty || []) sim.cmd({ type: 'cleanPanels', target: id });
   if (e.type === 'choice') {
     const ch = st.ev.choices[e.id];
     const ok = ch.options.findIndex((o) => (o.cost || 0) <= st.credits * 0.25 && !o.recheckH);

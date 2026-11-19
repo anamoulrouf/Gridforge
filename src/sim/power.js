@@ -100,6 +100,16 @@ export function demandAt(bal, type, hour) {
   return t.nominal * t.profile(hour);
 }
 
+/** Wholesale price (¢/kWh) right now, for stages with an electricity market (Stage 9+). */
+export function marketPrice(state, bal) {
+  if (!bal.market) return null;
+  let p = bal.market(state.clock, state.seed);
+  for (const d of state.ev?.deck || []) if (d.kind === 'priceSpike' && d.phase === 'active') p *= d.p.mult ?? 3;
+  return p;
+}
+/** Hot weather cuts what lines and transformers can carry (Stage 8): 1% per degree above 35 °C. */
+export const derate = (bal, w) => (bal.heatDerate && w && w.temp > 35 ? Math.max(0.6, 1 - (w.temp - 35) * 0.01) : 1);
+
 /** Source type behaviour (mission balance may add types). */
 export function srcType(bal, type) {
   return (bal.sourceTypes && bal.sourceTypes[type]) || (type === 'diesel' ? { dispatch: true, fuel: 'tank', rampH: bal.generator.rampH, maxKW: bal.generator.maxKW } : { dispatch: true });
@@ -116,10 +126,14 @@ export function sourceAvail(state, bal, id, w) {
   const T = srcType(bal, g.type);
   const rated = ratedKW(bal, g);
   if (g.retired) return { avail: 0, min: 0 };
-  if (T.variable === 'solar') return { avail: g.status === 'running' ? rated * solarFrac(w) * (g.damaged ? 0 : 1) : 0, min: 0, variable: true };
+  if (T.variable === 'solar') return { avail: g.status === 'running' ? rated * solarFrac(w) * (g.damaged ? 0 : 1) * (1 - (g.dust || 0)) : 0, min: 0, variable: true };
   if (T.variable === 'wind') return { avail: g.status === 'running' ? rated * windFrac(w) * (g.damaged ? 0 : 1) : 0, min: 0, variable: true };
+  if (T.profile) return { avail: g.status === 'running' ? rated * Math.max(0, Math.min(1, T.profile(Math.floor((state.clock % 1440) / 60), Math.floor(state.clock / 1440) + 1, w))) * (g.damaged ? 0 : 1) : 0, min: 0, variable: !T.dispatch };
   if (T.storage) {
-    const disch = g.status === 'running' && g.mode !== 'hold' && g.mode !== 'charge' ? Math.min(rated, g.soc * 60) : 0;
+    // "trade" mode sells only when the market price is high (Stage 9)
+    const price = g.mode === 'trade' ? marketPrice(state, bal) : null;
+    const sell = g.mode !== 'trade' || (price != null && price >= (T.sellAbove ?? bal.tradeSellAbove ?? 0.4));
+    const disch = g.status === 'running' && g.mode !== 'hold' && g.mode !== 'charge' && sell ? Math.min(T.dischargeKW ?? rated, g.soc * 60) : 0;
     return { avail: disch, min: 0, storage: true };
   }
   if (g.status === 'off' || g.status === 'nofuel' || g.status === 'tripped') return { avail: 0, min: 0 };
@@ -224,6 +238,13 @@ export function solve(state, bal, ctx = {}) {
       cs.status = tp.some((e) => !e.startsWith('X:') && state.edges[e] && (state.edges[e].state === 'trip' || state.edges[e].state === 'fault')) ? 'lineDown' : 'xfmrDown';
       continue;
     }
+    if ((cs.uflsUntil || 0) > state.t) {
+      // under-frequency load shedding: switched off automatically after a big unit tripped
+      cs.status = 'shed';
+      cs.ufls = true;
+      continue;
+    }
+    cs.ufls = false;
     const isl = islands.get(comp.get(bus));
     if (cs.exportKW > 0 && isl) isl.exportKW += cs.exportKW;
     if (!isl || isl.avail + isl.exportKW <= 0) {
@@ -235,11 +256,12 @@ export function solve(state, bal, ctx = {}) {
   }
 
   // ---- edge rating lookup and loading
+  const dr = derate(bal, w);
   const ratingOf = (eid) => {
-    if (eid.startsWith('X:')) return xfmrRating(bal, state.nodes[eid.slice(2)]);
+    if (eid.startsWith('X:')) return xfmrRating(bal, state.nodes[eid.slice(2)]) * dr;
     const e = state.edges[eid];
     if (e.kind === 'drop') return Infinity;
-    return lineRating(bal, e.tier);
+    return lineRating(bal, e.tier) * dr;
   };
   const computeLoads = (servedList) => {
     const load = new Map();
@@ -348,6 +370,21 @@ export function solve(state, bal, ctx = {}) {
       need -= giveTo(s, use);
       surplus += s.avail - use;
     }
+    // 2b. batteries in "trade" mode buy cheap power to charge (Stage 9)
+    const price = marketPrice(state, bal);
+    const gridCharge = [];
+    if (price != null || bal.chargeFromGrid) {
+      for (const s of isl.srcs) {
+        const g = state.gens[s.id];
+        if (!s.storage || g.status !== 'running') continue;
+        if (!(g.mode === 'charge' && bal.chargeFromGrid) && !(g.mode === 'trade' && price <= (srcType(bal, g.type).buyBelow ?? bal.tradeBuyBelow ?? 0.15))) continue;
+        const T = srcType(bal, g.type);
+        const want = Math.min(T.chargeMaxKW ?? ratedKW(bal, g), Math.max(0, ((g.kwh ?? T.kwh) - g.soc) * 60));
+        if (want <= 0) continue;
+        need += want;
+        gridCharge.push([g, want]);
+      }
+    }
     // 3. storage discharge, then dispatchable units by the player's priority
     const disp = isl.srcs.filter((x) => !x.variable).sort((a, b) => rank(state.gens[a.id].type) - rank(state.gens[b.id].type) || (a.storage ? -1 : 0) - (b.storage ? -1 : 0) || (a.id < b.id ? -1 : 1));
     for (const s of disp) {
@@ -356,17 +393,46 @@ export function solve(state, bal, ctx = {}) {
       if (room <= 0) continue;
       need -= giveTo(s, Math.min(need, room));
     }
-    // 4. surplus charges batteries (cannot create energy), the rest is curtailed
+    // a trading battery at a high price sells everything it can: what the town doesn't need is exported
+    if (price != null) {
+      for (const s of disp) {
+        const g = state.gens[s.id];
+        if (!s.storage || g.mode !== 'trade' || s.avail <= g.outKW + 1e-9) continue;
+        const extra = s.avail - g.outKW;
+        giveTo(s, extra);
+        need -= extra;
+      }
+    }
+    // grid charging gets whatever the dispatch could cover (the last of it first goes unserved)
+    let short = Math.max(0, need);
+    for (let i = gridCharge.length - 1; i >= 0; i--) {
+      const [g, want] = gridCharge[i];
+      const cut = Math.min(short, want);
+      g.chargeKW = want - cut;
+      short -= cut;
+    }
+    if (gridCharge.length) need = Math.min(need, 0);
+    // 4. surplus charges batteries (cannot create energy), the rest is sold abroad or curtailed
     if (need < 0) surplus += -need;
     for (const s of isl.srcs) {
       if (surplus <= 1e-9) break;
       const g = state.gens[s.id];
-      if (!s.storage || g.status !== 'running' || g.mode === 'hold' || g.outKW > 0) continue;
+      if (!s.storage || g.status !== 'running' || g.mode === 'hold' || g.outKW > 0 || g.chargeKW > 0) continue;
       const T = srcType(bal, g.type);
       const room = Math.max(0, ((g.kwh ?? T.kwh) - g.soc) * 60);
-      const ch = Math.min(ratedKW(bal, g), room, surplus);
+      const ch = Math.min(T.chargeMaxKW ?? ratedKW(bal, g), room, surplus);
       g.chargeKW = ch;
       surplus -= ch;
+    }
+    for (const s of isl.srcs) {
+      const g = state.gens[s.id];
+      const T = srcType(bal, g.type);
+      if (!T.market) continue;
+      g.exportKW = 0;
+      if (surplus <= 1e-9 || g.status !== 'running' || g.damaged) continue;
+      const ex = Math.min(surplus, Math.max(0, (T.exportMaxKW ?? ratedKW(bal, g)) - g.outKW));
+      g.exportKW = ex;
+      surplus -= ex;
     }
     curtailedKW += Math.max(0, surplus);
   }
@@ -375,7 +441,7 @@ export function solve(state, bal, ctx = {}) {
   for (const id in state.edges) state.edges[id].loadKW = load.get(id) || 0;
   const fc = {};
   // upcoming festivals raise the forecast for the hours they run
-  const fests = (state.ev?.deck || []).filter((d) => d.kind === 'festival' && (d.phase === 'warned' || d.phase === 'active') && d.ids);
+  const fests = (state.ev?.deck || []).filter((d) => (d.kind === 'festival' || d.kind === 'heat') && (d.phase === 'warned' || d.phase === 'active') && d.ids);
   const fm = (id, h) => {
     let m = 1;
     for (const d of fests) {
@@ -400,7 +466,8 @@ export function solve(state, bal, ctx = {}) {
     if (n.kind === 'xfmr') {
       n.loadKW = load.get('X:' + id) || 0;
       n.ratingKW = xfmrRating(bal, n);
-      n.loadPct = (n.loadKW / n.ratingKW) * 100;
+      n.loadPct = (n.loadKW / (n.ratingKW * dr)) * 100;
+      n.derate = dr;
       n.customers = customers.filter((c) => cust[c.id].xfmr === id || cust[c.id].sub === id).map((c) => c.id);
       let pk = 0;
       let ph = 0;
@@ -427,6 +494,26 @@ export function solve(state, bal, ctx = {}) {
   f.lossPct = f.genKW > 0 ? (losses / f.genKW) * 100 : 0;
   f.powered = customers.filter((c) => cust[c.id].status === 'on' || cust[c.id].status === 'partial').length;
   f.connected = customers.filter((c) => cust[c.id].active !== false && cust[c.id].connected).length;
+  // fast reserve: spare output that running units and batteries can give within seconds, and
+  // the biggest single infeed it must be able to replace if that unit trips (Stage 6 and later)
+  {
+    let res = 0;
+    let big = 0;
+    let bigId = null;
+    for (const id of srcIds) {
+      const g = state.gens[id];
+      const T = srcType(bal, g.type);
+      if (g.outKW > big + 1e-9) [big, bigId] = [g.outKW, id];
+      if (g.status !== 'running') continue;
+      if (T.storage) {
+        if (g.mode === 'hold') continue;
+        res += Math.max(0, Math.min(ratedKW(bal, g), g.soc * 60) - g.outKW) + (g.chargeKW || 0);
+      } else if (T.dispatch) res += Math.max(0, (g.availKW || 0) - g.outKW);
+    }
+    f.reserveKW = res;
+    f.largestKW = big;
+    f.largestId = bigId;
+  }
   f.deficitKW = Math.max(0, reachable.reduce((s, r) => s + r.cs.demand, 0) + losses - [...byIsl.keys()].reduce((s, ci) => s + islands.get(ci).avail + islands.get(ci).exportKW, 0));
 
   // energised buses (visuals): everything in an island with available supply
@@ -449,8 +536,35 @@ export function solve(state, bal, ctx = {}) {
       const a = busOf(state, e.a, e.tier);
       const b = busOf(state, e.b, e.tier);
       e.energized = live.has(a) && live.has(b) && islOn(a) && !(e.state === 'trip' || e.state === 'fault' || e.open);
-      e.ratingKW = lineRating(bal, e.tier);
+      e.ratingKW = lineRating(bal, e.tier) * dr;
       e.loadPct = (e.loadKW / e.ratingKW) * 100;
+    }
+  }
+  // spur flow: a source's output (or charging) runs along its own single-path spur line until the
+  // first junction. Used for de-icing (Stage 7); overload protection keeps the customer-path loads.
+  {
+    const adj = {};
+    for (const id in state.edges) {
+      const e = state.edges[id];
+      e.srcFlowKW = 0;
+      if (e.kind !== 'line' || e.open || e.state === 'fault' || e.state === 'trip') continue;
+      (adj[e.a] ||= []).push(id);
+      (adj[e.b] ||= []).push(id);
+    }
+    for (const gid of srcIds) {
+      const g = state.gens[gid];
+      const p = (g.outKW || 0) + (g.chargeKW || 0);
+      if (p <= 0.5) continue;
+      let node = gid;
+      let prev = null;
+      for (let k = 0; k < 40; k++) {
+        const next = (adj[node] || []).filter((x) => x !== prev);
+        if (next.length !== 1 || (k > 0 && (adj[node] || []).length > 2)) break;
+        const e = state.edges[next[0]];
+        e.srcFlowKW += p;
+        prev = next[0];
+        node = e.a === node ? e.b : e.a;
+      }
     }
   }
   for (const id in state.nodes) {

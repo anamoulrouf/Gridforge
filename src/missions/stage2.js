@@ -25,6 +25,7 @@ export const MAP2 = {
   id: 'stage2-millbrook',
   bounds: { minX: -240, maxX: 230, minZ: -150, maxZ: 150 },
   tile: { cx: -5, cz: 0, hw: 268, hd: 190, radius: 54 },
+  life: { traffic: 0.75 },
   roads: [
     { id: 'main', x: 0, z: 0, w: 540, d: 8, lanes: true },
     { id: 'old', x: -40, z: 0, w: 7, d: 240, lanes: true },
@@ -569,8 +570,29 @@ export default {
   chips: ['credits', 'cash', 'demand', 'gen', 'fuel', 'powered', 'trust', 'afford', 'rel'],
   objectives,
   weather: { 3: { heat: true, label: 'Heat wave' } },
+  cast: { mayor: { name: 'Henrik Dahl', role: 'Mayor of Millbrook', color: '#b48cf2', initials: 'HD' } },
+  quests: {
+    perDay: [1, 2],
+    pool: [
+      { key: 'lateShop', who: 'ravi', title: 'Late-night shopping on High Street', text: 'The shops stay open late tonight. Keep the bakery, grocer, pharmacy and hardware store lit from 17:00 to 21:00.', goal: { type: 'keepLit', ids: ['s1', 's2', 's3', 's4'], fromH: 17, toH: 21 }, reward: { credits: 300, rep: 3 }, news: 'High Street’s late opening is a hit.' },
+      { key: 'water', who: 'mayor', title: 'Fill the water tanks', text: 'The pumping station is filling the town’s tanks for the weekend. Keep it running from 10:00 to 16:00.', goal: { type: 'keepLit', ids: ['pump'], fromH: 10, toH: 16 }, reward: { credits: 250, rep: 3 } },
+      { key: 'vaccines', who: 'maya', title: 'Vaccination day at the clinic', text: 'The clinic is vaccinating children today. The fridge for the vaccines must stay on from 09:00 to 16:00.', goal: { type: 'keepLit', ids: ['clinic'], fromH: 9, toH: 16 }, reward: { credits: 300, rep: 4 }, news: 'Two hundred children vaccinated at Millbrook Clinic.' },
+      { key: 'estate', who: 'mayor', title: 'Connect three new homes', text: 'Families on the estate are tired of waiting. Connect three more buildings today.', goal: { type: 'build', kind: 'drop', n: 3, hour: 20 }, reward: { credits: 400, rep: 3 } },
+      { key: 'office', who: 'daniel', title: 'Payroll day at the Works', text: 'The Millbrook Works office runs payroll today. Their computers need power from 09:00 to 17:00.', goal: { type: 'poweredBy', id: 'o1', hour: 12 }, reward: { credits: 350, rep: 2 } },
+      { key: 'noCuts', who: 'maya', title: 'An evening without cuts', text: 'No one switched off between 17:00 and 22:00, please.', goal: { type: 'noShed', fromH: 17, toH: 22 }, reward: { credits: 250, rep: 2 } },
+    ],
+  },
+  story: [
+    { day: 1, hour: 16, who: 'mayor', lines: ['Welcome to Millbrook. The old diesel station has kept us going for years, but the town is growing fast.', 'Price it fairly and keep it on. That’s all anyone asks.'] },
+    { day: 2, hour: 10, who: 'leila', title: 'The Gazette wants to see your accounts', text: 'Leila from the Millbrook Gazette says people want to know where their money goes. Will you open the books?', options: [{ label: 'Open the books', rep: 5, note: 'Being open about money builds trust.', news: 'Millbrook utility opens its books to the public.' }, { label: 'No comment', rep: -3, note: 'The Gazette prints “Utility refuses to explain bills”.', news: 'Utility refuses to explain its bills.' }] },
+    { day: 3, hour: 9, who: 'tom', title: 'Line workers ask for safety training', text: 'Tom, the line workers’ union rep, asks for a paid safety day after a near miss on a pole.', options: [{ label: 'Pay for training · 400 ¢', cost: 400, rep: 3, note: 'Safer crews, happier crews.', news: 'Line crews get new safety training.' }, { label: 'Not now', rep: -2, note: 'The crew grumbles.' }] },
+    { day: 4, hour: 18, who: 'ravi', lines: ['Fridges full, lights on, till ringing. Best week the High Street has had in years.'] },
+    { day: 5, hour: 10, who: 'amira', title: 'Solar lessons at school', text: 'Mrs Khan wants a solar science kit so pupils can learn how electricity is made.', options: [{ label: 'Buy the kit · 300 ¢', cost: 300, rep: 4, news: 'Millbrook pupils build their first solar panel.' }, { label: 'Maybe next year', rep: -1 }] },
+    { day: 6, hour: 12, who: 'mayor', lines: ['The council meets tomorrow about your licence. Make today count.'] },
+  ],
   events: {
-    count: [3, 4],
+    count: [7, 9],
+    minGapH: 6,
     avoidH: [[44, 72]], // storm night and heat wave (day 2 evening to day 3)
     pool: [
       { key: 'flood', kind: 'flood', weight: 2, windowH: [24, 42], warnH: 4, durH: 3, params: { area: 'the river flats and the west side of the old quarter', zone: { poly: [[-136, -46], [-42, -46], [-42, 68], [-136, 68]] } } },
@@ -579,6 +601,11 @@ export default {
       { key: 'annexe', kind: 'arrivals', weight: 1, windowH: [76, 112], warnH: 8, durH: 12, params: { group: 'annexe', at: { x: -8, z: 108 }, title: 'A school annexe is opening', text: 'Millbrook School is opening a new annexe next door for the growing number of children.', say: 'The school’s new annexe opens soon. The children will need lights and heating.', goodNews: 'School annexe opens with power on day one.', badNews: 'New school annexe opens without power.' } },
       { key: 'nightTariff', kind: 'request', weight: 1, windowH: [26, 120], params: { who: 'maya', title: 'A cheaper tariff for shift workers', text: 'Night-shift workers at Millbrook Works ask for a lower home tariff. Money is tight for many families.', options: [{ label: 'Lower the home tariff by 5 ¢', yes: true, tariff: { home: -0.05 }, rep: 5, trust: 3, cls: ['home'], note: 'Less revenue from homes, but people will appreciate it.', news: 'Utility cuts home tariff after workers ask for help.' }, { label: 'Keep prices as they are', rep: -3, note: 'You keep the revenue. Some people will be disappointed.' }] } },
       { key: 'lights', kind: 'request', weight: 1, windowH: [26, 120], params: { who: 'maya', title: 'Street lights for Mill Row', text: 'Families on Mill Row say the lane is pitch dark at night and children walk home from school there. They ask you to put up street lights.', options: [{ label: 'Put up street lights · 450 ¢', cost: 450, yes: true, rep: 6, trust: 4, cls: ['lowincome'], note: 'A small cost for a safer street.', news: 'New street lights make Mill Row safer.' }, { label: 'Not right now', rep: -3, note: 'You save the money. The lane stays dark.' }] } },
+      { key: 'storm', kind: 'storm', weight: 2, windowH: [74, 130], warnH: 3, durH: 2, params: { p: 0.15, max: 2 } },
+      { key: 'theft', kind: 'theft', weight: 2, windowH: [26, 130], warnH: 6, params: { area: 'the old quarter', cost: 250 } },
+      { key: 'inspection', kind: 'inspection', weight: 1, windowH: [74, 130], warnH: 10, params: { grant: 400 } },
+      { key: 'sponsor', kind: 'request', weight: 1, windowH: [26, 130], params: { who: 'daniel', title: 'Millbrook Bank wants its name on your poles', text: 'Millbrook Bank offers 500 ¢ to put small adverts on the poles along High Street.', options: [{ label: 'Accept · +500 ¢', gain: 500, rep: -2, yes: true, note: 'Useful money. Some people dislike adverts on the street.', news: 'Bank adverts appear on High Street power poles.' }, { label: 'No thanks', rep: 1, note: 'High Street stays advert-free.' }] } },
+      { key: 'minister', kind: 'vipVisit', weight: 2, windowH: [74, 130], atHour: 11, warnH: 14, durH: 3, params: { name: 'The energy minister', who: 'mayor', zone: { x: 40, z: -60, r: 60 }, grant: 600, text: 'The energy minister wants to see how a small utility keeps High Street running.', say: 'The minister is touring High Street. Show them what a well-run town grid looks like.', goodNews: 'Minister praises Millbrook’s “model” town grid.', badNews: 'Embarrassment as High Street goes dark during the minister’s visit.' } },
     ],
     protests: { outages: 4, credit: 800 },
   },

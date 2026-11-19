@@ -5,6 +5,12 @@ export const CAST = {
   sofia: { name: 'Sofia Reyes', role: 'Chief grid engineer', color: '#ff9f3a', initials: 'SR' },
   daniel: { name: 'Daniel Carter', role: 'Financial advisor', color: '#74d36b', initials: 'DC' },
   maya: { name: 'Maya Rahman', role: 'Community representative', color: '#ff7eb6', initials: 'MR' },
+  mayor: { name: 'Grace Okafor', role: 'Mayor', color: '#b48cf2', initials: 'GO' },
+  leila: { name: 'Leila Haddad', role: 'Reporter, the local Gazette', color: '#f2d15c', initials: 'LH' },
+  tom: { name: 'Tom Brennan', role: 'Union representative', color: '#e2734e', initials: 'TB' },
+  amira: { name: 'Amira Khan', role: 'Head teacher', color: '#5fd3c6', initials: 'AK' },
+  ravi: { name: 'Ravi Patel', role: 'Shopkeeper and market trader', color: '#9bd36b', initials: 'RP' },
+  nana: { name: 'Nana Adjei', role: 'Oldest resident', color: '#d9b38c', initials: 'NA' },
 };
 
 // Learning panel: What happened · Why · What can I do · Real-world connection

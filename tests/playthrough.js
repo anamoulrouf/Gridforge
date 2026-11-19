@@ -130,6 +130,9 @@ async (page) => {
       await ev(() => __gf.skipHours(0.25));
       await page.waitForTimeout(120);
       await closeModals();
+      // respond to run events like a player would (service a humming transformer, send the crew)
+      const act = page.locator('.alert button', { hasText: /Service it now|Send the crew|Repair all/ }).first();
+      if (await act.count()) await act.click().catch(() => {});
       if (onTick) await onTick();
     }
     return ev(pred);

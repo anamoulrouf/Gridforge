@@ -20,10 +20,11 @@ const play = (M, extra) => {
   return sim;
 };
 
-test('the campaign has five stages with unique ids and complete UI content', () => {
-  assert.equal(STAGES.length, 5);
-  assert.deepEqual(STAGES.map((s) => s.n), [1, 2, 3, 4, 5]);
-  assert.equal(new Set(STAGES.map((s) => s.id)).size, 5);
+test('the campaign stages are numbered in order with unique ids and complete UI content', () => {
+  assert.ok(STAGES.length >= 5);
+  assert.deepEqual(STAGES.map((s) => s.n), STAGES.map((_, i) => i + 1));
+  assert.equal(new Set(STAGES.map((s) => s.id)).size, STAGES.length);
+  assert.equal(new Set(STAGES.map((s) => s.key)).size, STAGES.length);
   for (const s of STAGES) {
     assert.ok(s.objectives.some((o) => o.primary), s.key);
     for (const o of s.objectives) {
@@ -175,7 +176,7 @@ test('Stage 4: solar is zero at night; the battery cannot create energy', () => 
 });
 
 test('Stage 4: without storage and new clean supply, coal retirement leaves people dark', () => {
-  const sim = createSim({ mission: S4 });
+  const sim = createSim({ mission: S4, events: false }); // run events would end it sooner; this checks retirement
   for (let i = 0; i < 4 * D && !sim.state.result; i++) sim.tick();
   assert.equal(sim.state.flags.retireOk, false);
 });

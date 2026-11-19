@@ -193,6 +193,12 @@ export function createPeople(scene, map) {
         else if (job.phase === 'return') f = job.remain / job.travel;
         else f = 1;
         const a = along(route, Math.max(0, Math.min(1, f)));
+        if (job.phase === 'travel' && job.hopFrom && site) {
+          // driving straight from the last job to this one
+          const k = Math.max(0, Math.min(1, 1 - job.remain / (job.hopTravel || 1)));
+          a.p = a.p.clone().set(job.hopFrom.x + (site.x - job.hopFrom.x) * k, a.p.y, job.hopFrom.z + (site.z - job.hopFrom.z) * k);
+          a.yaw = Math.atan2(-(site.z - job.hopFrom.z), site.x - job.hopFrom.x);
+        }
         truck.position.lerp(a.p, Math.min(1, dt * 8));
         let yaw = a.yaw + (job.phase === 'return' ? Math.PI : 0);
         truck.rotation.y += (((yaw - truck.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 6);

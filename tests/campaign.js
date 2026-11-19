@@ -224,13 +224,26 @@ async (page) => {
     R.smartOn = await ev(() => !!__gf.state().programs?.smart?.on);
     await shot('09-s5-programs');
 
-    // ---------------------------------------------------------------- I. Campaign finale: no "Next" after Stage 5
+    // ---------------------------------------------------------------- I. Stage 5 now leads on to Chapter II; the last stage is the finale
     await ev(() => __gf.jumpToEnding(5));
+    await wait(2500);
+    R.s5Next = await page.getByRole('button', { name: /^Next:/ }).innerText().catch(() => null);
+    await shot('10b-s5-next');
+    await ev(() => __gf.jumpToEnding(__gf.stages.length));
     await wait(2500);
     R.finaleNext = await page.getByRole('button', { name: /^Next:/ }).count();
     R.finaleMenu = await page.getByRole('button', { name: 'Return to main menu' }).count();
     await shot('10-finale');
     R.bestS5 = await ev(() => JSON.parse(localStorage.getItem('gridforge.campaign.v1')).best);
+    // campaign screen with both chapters
+    await page.getByRole('button', { name: 'Return to main menu' }).click().catch(() => {});
+    await wait(1500);
+    await page.getByRole('button', { name: 'Campaign' }).click();
+    await wait(400);
+    R.chapters = await page.locator('.stages .chapter').allInnerTexts();
+    R.tilesAll = await page.locator('.stage-tile').count();
+    await shot('11-chapters');
+    await page.getByRole('button', { name: 'Back' }).click();
   } catch (e) {
     R.error = String(e).slice(0, 400);
     await shot('zz-error');

@@ -18,6 +18,15 @@ function zoneShape(z) {
   s.absarc(z.x, -z.z, z.r, 0, Math.PI * 2, false);
   return s;
 }
+function pointIn([x, z], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i];
+    const [xj, zj] = poly[j];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
 function zoneOutline(z) {
   const pts = z.poly ? [...z.poly, z.poly[0]].map(([x, zz]) => new THREE.Vector3(x, 0.6, zz)) : Array.from({ length: 65 }, (_, i) => new THREE.Vector3(z.x + Math.cos((i / 64) * Math.PI * 2) * z.r, 0.6, z.z + Math.sin((i / 64) * Math.PI * 2) * z.r));
   return new THREE.BufferGeometry().setFromPoints(pts);
@@ -28,6 +37,7 @@ export function createHazards(scene) {
   const root = new THREE.Group();
   root.name = 'hazards';
   scene.add(root);
+  let flash = 0;
   const views = new Map(); // deck id → { kind, objs, water, level }
 
   // ------------------------------------------------------------ rain (one shared field near the camera target)
@@ -41,6 +51,7 @@ export function createHazards(scene) {
   root.add(rain);
   const seeds = Array.from({ length: DROPS }, () => [Math.random(), Math.random(), Math.random()]);
   let rainK = 0;
+  let dustK = 0;
 
   // ------------------------------------------------------------ lanterns (festival) and crowds (protests)
   const LMAX = 260;
@@ -65,6 +76,7 @@ export function createHazards(scene) {
   const up = new THREE.Vector3(0, 1, 0);
   const v3 = new THREE.Vector3();
   const one = new THREE.Vector3(1, 1, 1);
+  const v3b = new THREE.Vector3();
 
   let shakeT = 0;
   let shakeAmp = 0;
@@ -78,6 +90,40 @@ export function createHazards(scene) {
       ring.renderOrder = 6;
       v.ring = ring;
       v.objs.push(ring);
+      if (d.kind === 'wildfire') {
+        // scorched ground that glows while the fire burns, plus flickering flames
+        const burn = new THREE.Mesh(new THREE.ShapeGeometry(zoneShape(zone), 48), new THREE.MeshBasicMaterial({ color: '#3a2a20', transparent: true, opacity: 0, depthWrite: false }));
+        burn.rotation.x = -Math.PI / 2;
+        burn.position.y = 0.45;
+        burn.renderOrder = 3;
+        v.burn = burn;
+        v.objs.push(burn);
+        const c = zoneCenter(zone);
+        const N = 46;
+        const fl = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 5, 6).translate(0, 2.5, 0), new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.2, 0.25), toneMapped: false, transparent: true, opacity: 0.9 }), N);
+        fl.frustumCulled = false;
+        fl.count = 0;
+        v.flames = fl;
+        v.spots = [];
+        let k = 0;
+        for (let i = 0; i < 400 && v.spots.length < N; i++) {
+          const a = (i * 2.399) % (Math.PI * 2);
+          const r = c.r * Math.sqrt(((i * 0.618) % 1));
+          const x = c.x + Math.cos(a) * r;
+          const z = c.z + Math.sin(a) * r;
+          if (zone.poly && !pointIn([x, z], zone.poly)) continue;
+          v.spots.push([x, z, 0.7 + ((k++ * 0.37) % 0.8)]);
+        }
+        v.objs.push(fl);
+      }
+      if (d.kind === 'landslide') {
+        const mud = new THREE.Mesh(new THREE.ShapeGeometry(zoneShape(zone), 48), new THREE.MeshStandardMaterial({ color: '#7a5a3c', transparent: true, opacity: 0, roughness: 1, depthWrite: false }));
+        mud.rotation.x = -Math.PI / 2;
+        mud.position.y = 0.5;
+        mud.renderOrder = 3;
+        v.mud = mud;
+        v.objs.push(mud);
+      }
       if (d.kind === 'flood' || d.kind === 'tsunami') {
         const w = new THREE.Mesh(new THREE.ShapeGeometry(zoneShape(zone), 48), new THREE.MeshStandardMaterial({ color: WATER, transparent: true, opacity: 0.62, roughness: 0.15, metalness: 0.1, depthWrite: false }));
         w.rotation.x = -Math.PI / 2;
@@ -119,11 +165,14 @@ export function createHazards(scene) {
     const live = new Set();
     let raining = 0;
     let storm = 0;
+    let lightning = false;
+    let smoke = 0;
+    let dust = 0;
     let nL = 0;
     if (ev) {
       for (const d of ev.deck) {
         const showing = (d.phase === 'warned' || d.phase === 'active') && (d.p.zone || d.p.track);
-        const wetAfter = (d.kind === 'flood' || d.kind === 'tsunami') && d.phase === 'done' && views.get(d.id)?.level > 0.01;
+        const wetAfter = (d.kind === 'flood' || d.kind === 'tsunami' || d.kind === 'wildfire' || d.kind === 'landslide') && d.phase === 'done' && views.get(d.id)?.level > 0.01;
         if (showing || wetAfter) {
           live.add(d.id);
           if (!views.has(d.id)) views.set(d.id, makeView(d));
@@ -146,8 +195,33 @@ export function createHazards(scene) {
             v.water.position.y = -0.4 + v.level * (d.kind === 'tsunami' ? 2.4 : 1.5) + Math.sin(time * 1.3) * 0.05 * v.level;
             v.water.material.opacity = 0.35 + 0.3 * v.level;
           }
-          if (active && (d.kind === 'flood' || d.kind === 'cyclone')) raining = Math.max(raining, 1);
+          if (v.burn || v.mud) {
+            v.level += ((active ? 1 : 0) - v.level) * Math.min(1, dt * 0.5);
+            if (v.burn) {
+              v.burn.material.opacity = 0.55 * v.level;
+              let n = 0;
+              if (active) {
+                for (const [x, z, s] of v.spots) {
+                  const fk = ctx.reduceMotion ? 1 : 0.75 + 0.35 * Math.sin(time * 9 + x * 0.7 + z);
+                  v3.set(x, 0.4, z);
+                  m4.compose(v3, q.identity(), v3b.set(s, s * fk, s));
+                  v.flames.setMatrixAt(n++, m4);
+                }
+              }
+              v.flames.count = n;
+              v.flames.instanceMatrix.needsUpdate = true;
+              if (active) smoke = Math.max(smoke, 0.45);
+            }
+            if (v.mud) v.mud.material.opacity = 0.85 * v.level;
+          }
+          if (active && (d.kind === 'flood' || d.kind === 'cyclone' || d.kind === 'landslide')) raining = Math.max(raining, 1);
           if (active && d.kind === 'cyclone') storm = 1;
+        }
+        if (d.kind === 'dustStorm' && d.phase === 'active') dust = 1;
+        if (d.kind === 'storm' && d.phase === 'active') {
+          raining = 1;
+          storm = Math.max(storm, 0.75);
+          lightning = true;
         }
         if (d.kind === 'festival' && d.phase === 'active' && d.ids) {
           for (const id of d.ids) {
@@ -187,7 +261,10 @@ export function createHazards(scene) {
     crowd.instanceMatrix.needsUpdate = signs.instanceMatrix.needsUpdate = true;
 
     // rain field around the camera target
-    rainK += (raining - rainK) * Math.min(1, dt * 1.5);
+    const want = Math.max(raining, dust);
+    rainK += (want - rainK) * Math.min(1, dt * 1.5);
+    dustK += (dust - dustK) * Math.min(1, dt * 1.5);
+    rain.material.color.set(dustK > 0.5 ? '#d2a86a' : '#9fb8cc');
     rain.visible = rainK > 0.02 && !ctx.reduceMotion;
     if (rain.visible) {
       const cx = ctx.target.x;
@@ -208,17 +285,31 @@ export function createHazards(scene) {
         rainPos[o + 4] = (y - 3.2) * show - (1 - show) * 50;
         rainPos[o + 5] = z + 0.6 * storm;
       }
+      if (dustK > 0.5) {
+        // sand streaks blow sideways instead of falling
+        for (let i = 0; i < DROPS; i++) {
+          const o = i * 6;
+          rainPos[o + 3] = rainPos[o] + 4;
+          rainPos[o + 4] = rainPos[o + 1] - 0.4;
+          rainPos[o + 1] = rainPos[o + 1] * 0.35;
+          rainPos[o + 4] = rainPos[o + 4] * 0.35;
+        }
+      }
       rainGeo.attributes.position.needsUpdate = true;
       rain.material.opacity = 0.18 + 0.25 * rainK;
     }
-    return { storm: Math.max(storm, rainK * 0.6) };
+    // lightning: a bright double flicker every few seconds during thunderstorms
+    if (lightning && !ctx.reduceMotion && flash <= 0 && Math.random() < dt * 0.35) flash = 1;
+    flash = Math.max(0, flash - dt * 3.5);
+    const f = flash > 0.66 || (flash > 0.2 && flash < 0.4) ? flash : 0;
+    return { storm: Math.max(storm, rainK * 0.6, smoke, dustK * 0.5), flash: f };
   }
 
   /** Dim the lights in a storm (call after the day/night update). */
-  function weatherLight(G, k) {
+  function weatherLight(G, k, flash = 0) {
     if (k <= 0.01) return;
     G.key.intensity *= 1 - 0.55 * k;
-    G.hemi.intensity *= 1 - 0.3 * k;
+    G.hemi.intensity *= 1 - 0.3 * k + flash * 2.2;
   }
 
   function shake(sec, amp = 2.2) {

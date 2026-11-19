@@ -12,6 +12,7 @@ import { initEconomy, accrueMinute, hourlyEconomy, midnight } from './economy.js
 import { rng, fnv, canonical } from './rng.js';
 import { runSteps } from './steps.js';
 import { initEvents, eventsTick, eventDemandMult, eventCommands, withCommunity, crewFactor } from './events.js';
+import { initQuests, questsTick } from './quests.js';
 import STAGE1 from '../missions/stage1.js';
 
 export const POWERED = new Set(['on', 'partial']);
@@ -36,7 +37,7 @@ function mkGen(def, bal) {
     g.mode = 'auto';
     g.status = 'running';
   }
-  if (T.variable) g.status = 'running';
+  if (T.variable || (T.profile && !T.dispatch)) g.status = 'running';
   if (T.reservoir) g.reservoir = def.reservoir ?? T.reservoir;
   if (def.running) g.status = 'running';
   if (def.retireAt != null) g.retireAt = def.retireAt;
@@ -98,7 +99,10 @@ function initialState(seed, mission, withEvents = true) {
   st.weatherSeed = mission.weatherSeed ?? 1337;
   st.weather = weatherAt(st.weatherSeed, st.clock, mission.weather);
   mission.init?.(st);
-  if (withEvents) initEvents(st, mission, bal);
+  if (withEvents) {
+    initEvents(st, mission, bal);
+    initQuests(st, mission);
+  }
   return st;
 }
 
@@ -267,7 +271,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (!opt) return { ok: false, reason: 'badTarget' };
       if (site.unlockAt != null && state.clock < site.unlockAt) return { ok: false, reason: 'notYet' };
       if (state.credits < opt.cost) return { ok: false, reason: 'noCredits' };
-      const def = { id: site.id, type: opt.type, name: site.name?.replace(/ site$/, ''), tier: opt.tier || site.tier || 'MV', x: site.x, z: site.z, w: site.w, d: site.d, port: site.port, kw: opt.kw, kwh: opt.kwh, soc: opt.soc, reservoir: opt.reservoir, turbines: site.turbines };
+      const def = { id: site.id, type: opt.type, name: site.name?.replace(/ site$/, ''), tier: opt.tier || site.tier || 'MV', x: site.x, z: site.z, w: site.w, d: site.d, port: site.port, kw: opt.kw, kwh: opt.kwh, soc: opt.soc, reservoir: opt.reservoir, turbines: site.turbines, label: opt.label, color: opt.color, dirX: opt.dirX, dirZ: opt.dirZ };
       state.built[site.id] = def;
       state.nodes[site.id] = { id: site.id, kind: 'gen', tier: def.tier, x: site.x, z: site.z, cost: opt.cost, built: state.t, site: true };
       state.gens[site.id] = mkGen(def, bal);
@@ -378,7 +382,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     battery(c) {
       const g = state.gens[c.target];
       if (!g || !srcType(bal, g.type).storage) return { ok: false, reason: 'badTarget' };
-      if (!['auto', 'hold', 'charge'].includes(c.mode)) return { ok: false, reason: 'badTarget' };
+      if (!['auto', 'hold', 'charge', 'trade'].includes(c.mode)) return { ok: false, reason: 'badTarget' };
+      if (c.mode === 'trade' && !bal.market) return { ok: false, reason: 'noMarket' };
       g.mode = c.mode;
       resolveAndDiff();
       return { ok: true };
@@ -570,6 +575,62 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     return Math.max(10, Math.round((d / bal.crew.speedMPerH) * 60 * crewFactor(state)));
   }
 
+  /** Broken lines and transformers between a dark critical customer (hospital, clinic, pump) and
+   *  the nearest live part of the grid. Crews fix these first, as real utilities do. */
+  function criticalBlockers() {
+    const out = new Set();
+    const adj = {};
+    for (const id in state.edges) {
+      const e = state.edges[id];
+      if (e.kind !== 'line') continue;
+      (adj[e.a] ||= []).push([e.b, id]);
+      (adj[e.b] ||= []).push([e.a, id]);
+    }
+    const broken = (x) => x && (x.state === 'fault');
+    for (const c of map.customers) {
+      const T = (bal.types && bal.types[c.type]) || CUSTOMER_TYPES[c.type];
+      const cs = state.cust[c.id];
+      if (!T?.critical || cs.active === false || cs.status === 'on' || cs.status === 'partial') continue;
+      const dId = dropOf(state, c.id);
+      if (!dId) continue;
+      if (broken(state.edges[dId])) out.add(dId);
+      const start = state.edges[dId].a;
+      const prev = { [start]: null };
+      const q = [start];
+      let hit = null;
+      while (q.length && !hit) {
+        const u = q.shift();
+        const n = state.nodes[u];
+        if (u !== start && n && n.energized && !broken(n)) {
+          hit = u;
+          break;
+        }
+        for (const [v, eid] of (adj[u] || []).slice().sort((a, b) => (a[1] < b[1] ? -1 : 1))) {
+          if (v in prev) continue;
+          prev[v] = [u, eid];
+          q.push(v);
+        }
+      }
+      for (let u = hit; u && prev[u]; u = prev[u][0]) {
+        const [pu, eid] = prev[u];
+        if (broken(state.edges[eid])) out.add(eid);
+        if (broken(state.nodes[pu])) out.add(pu);
+      }
+      if (broken(state.nodes[start])) out.add(start);
+    }
+    return out;
+  }
+  /** Next queued job: repairs that bring a critical customer back come first. */
+  function nextJob(cr) {
+    let k = 0;
+    if (cr.queue.length > 1) {
+      const pri = criticalBlockers();
+      const i = cr.queue.findIndex((j) => j.type === 'repair' && pri.has(j.target));
+      if (i > 0) k = i;
+    }
+    return cr.queue.splice(k, 1)[0];
+  }
+
   function dispatch(job) {
     const j = { ...job, phase: 'travel', remain: travelMin(job.target), travel: travelMin(job.target) };
     if (state.crew.job && state.crew.job.phase !== 'return') {
@@ -605,7 +666,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     const j = cr.job;
     if (!j) {
       if (cr.queue.length) {
-        cr.job = cr.queue.shift();
+        cr.job = nextJob(cr);
         emit('crewDispatched', { target: cr.job.target, kind: cr.job.type, etaMin: cr.job.remain });
       }
       return;
@@ -614,7 +675,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       if (--j.remain <= 0) {
         cr.job = null;
         if (cr.queue.length) {
-          cr.job = cr.queue.shift();
+          cr.job = nextJob(cr);
           emit('crewDispatched', { target: cr.job.target, kind: cr.job.type, etaMin: cr.job.remain });
         }
       }
@@ -642,7 +703,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
           j.remain = Math.round(bal.crew.maintainH * 60 * crewFactor(state));
           if (g) g.servicing = true;
           else n.state = 'maint';
-          emit('maintStart', { target: j.target });
+          emit(j.type === 'clean' ? 'cleanStart' : 'maintStart', { target: j.target });
           return 'resolve';
         }
       }
@@ -682,6 +743,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
           if (g) {
             g.servicing = false;
             g.condition = 100;
+            if (j.type === 'clean') g.dust = 0;
           } else {
             n.state = 'ok';
             n.condition = 100;
@@ -689,8 +751,19 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
             n.lastServicedT = state.t;
             if (n.hiddenWear != null) n.hiddenWear = 0;
           }
-          state.stats.serviced++;
-          emit('maintained', { target: j.target });
+          if (j.type !== 'clean') state.stats.serviced++;
+          emit(j.type === 'clean' ? 'cleaned' : 'maintained', { target: j.target });
+        }
+        if (cr.queue.length) {
+          // more work waiting: drive straight to the next site instead of back to the depot
+          const nx = nextJob(cr);
+          const a = siteOf(j.target);
+          const b = siteOf(nx.target);
+          const hop = a && b ? Math.max(10, Math.round(((Math.abs(a.x - b.x) + Math.abs(a.z - b.z)) / bal.crew.speedMPerH) * 60 * crewFactor(state))) : nx.remain;
+          const t = Math.min(hop, nx.travel);
+          cr.job = { ...nx, remain: t, hopTravel: t, hopFrom: a ? { x: a.x, z: a.z } : null };
+          emit('crewDispatched', { target: nx.target, kind: nx.type, etaMin: t });
+          return 'resolve';
         }
         cr.job = { ...j, phase: 'return', remain: j.travel };
         return 'resolve';
@@ -784,7 +857,8 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
       const kwh = (g.outKW || 0) / 60;
       if (T.fuel === 'tank' && kwh > 0) {
         const eff = g.condition < 50 ? (T.kWhPerFuelWorn ?? bal.generator.kWhPerFuelWorn) : (T.kWhPerFuel ?? bal.generator.kWhPerFuel);
-        const use = kwh / eff;
+        // a running engine burns some fuel even at no load (idleFrac of its rating)
+        const use = (kwh + (T.idleFrac && g.status === 'running' ? (ratedKW(bal, g) * T.idleFrac) / 60 : 0)) / eff;
         g.fuel = Math.max(0, g.fuel - use);
         state.stats.fuelUsed += use;
         if (g.fuel <= 0) {
@@ -892,6 +966,7 @@ export function createSim({ seed = 1337, mission = STAGE1, bal: balOverride, map
     if (crewTick() === 'resolve') needResolve = true;
     if (mission.director?.(state, api) === 'resolve') needResolve = true;
     if (eventsTick(state, api, bal)) needResolve = true;
+    questsTick(state, api, bal, mission);
     void needResolve;
 
     // demand → dispatch → route → losses (every tick: demand changes hourly)

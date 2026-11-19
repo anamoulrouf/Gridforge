@@ -4,6 +4,7 @@
 export const MISSION1 = {
   id: 'stage1-first-district',
   bounds: { minX: -160, maxX: 160, minZ: -160, maxZ: 160 },
+  life: { traffic: 0.45, walkers: 2 }, // a small rural town: a few cars, people out once the lights come on
 
   roads: [
     // axis-aligned rectangles { x, z, w (along x), d (along z) } — centre + size

@@ -7,7 +7,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { rng } from '../sim/rng.js';
 import { rectDist } from '../sim/grid.js';
-import { poolTexture, grassTexture, soilTexture, plateTexture, clockTexture, stripeTexture, hazardTexture, ribTexture, crossTexture, roofTileTexture } from './textures.js';
+import { poolTexture, grassTexture, soilTexture, plateTexture, clockTexture, stripeTexture, hazardTexture, ribTexture, crossTexture, roofTileTexture, pvTexture } from './textures.js';
 
 const WARM = new THREE.Color(2.6, 1.45, 0.6); // HDR window light (blooms at night)
 const WARM_SOFT = new THREE.Color(1.8, 1.05, 0.45);
@@ -159,7 +159,7 @@ export function createWorld(scene, map) {
   const mt = map.tile || {};
   const T = { cx: mt.cx ?? 0, cz: mt.cz ?? 0, hw: mt.hw ?? TILE.half, hd: mt.hd ?? TILE.half, radius: mt.radius ?? TILE.radius, depth: mt.depth ?? TILE.depth };
   T.half = Math.max(T.hw, T.hd);
-  island(root, T.cx, T.cz, T.hw * 2, T.hd * 2, T.radius, 0, T.depth);
+  island(root, T.cx, T.cz, T.hw * 2, T.hd * 2, T.radius, 0, T.depth, map.desert ? '#d8b878' : map.ground || PAL.grass);
 
   // service-area boundary (subtle cream dashes on the lawn)
   {
@@ -217,6 +217,19 @@ export function createWorld(scene, map) {
       for (const sd of [-1, 1]) block(root, along ? L : 0.5, 1.0, along ? 0.5 : L, mat('#e9e0cc'), bx + (along ? 0 : sd * (r.w / 2 + 0.6)), 0.8, bz + (along ? sd * (r.d / 2 + 0.6) : 0), { r: 0.15 });
     }
   }
+  // railway: a gravel bed with two rails and sleepers (Highvale)
+  if (map.rail) {
+    const r = map.rail;
+    const along = r.w > r.d;
+    const len = Math.min(along ? r.w : r.d, (along ? T.hw : T.hd) * 2 - 6);
+    block(root, along ? len : 6, 0.25, along ? 6 : len, mat('#9a948a', { roughness: 1 }), r.x, 0.13, r.z, { r: 0.05, cast: false });
+    for (const o of [-0.9, 0.9]) block(root, along ? len : 0.18, 0.2, along ? 0.18 : len, mat('#6d6f72', { metalness: 0.5, roughness: 0.4 }), r.x + (along ? 0 : o), 0.38, r.z + (along ? o : 0), { r: 0.02, cast: false });
+    const sl = [];
+    for (let s0 = -len / 2 + 1; s0 < len / 2; s0 += 2.2) sl.push(s0);
+    const sm = new THREE.InstancedMesh(new THREE.BoxGeometry(along ? 0.5 : 3, 0.12, along ? 3 : 0.5), mat('#5a4636'), sl.length);
+    sl.forEach((s0, i) => sm.setMatrixAt(i, new THREE.Matrix4().makeTranslation(r.x + (along ? s0 : 0), 0.3, r.z + (along ? 0 : s0))));
+    root.add(sm);
+  }
   // gentle hills (wind ridge, headlands)
   for (const hl of map.hills || []) {
     const pts = [];
@@ -224,12 +237,25 @@ export function createWorld(scene, map) {
       const f = i / 10;
       pts.push(new THREE.Vector2(hl.r * f, hl.h * Math.cos((f * Math.PI) / 2) ** 2));
     }
-    const m = new THREE.Mesh(new THREE.LatheGeometry(pts.reverse(), 32), new THREE.MeshStandardMaterial({ color: PAL.grass, map: grassTex, roughness: 1 }));
+    const m = new THREE.Mesh(new THREE.LatheGeometry(pts.reverse(), 32), new THREE.MeshStandardMaterial({ color: hl.color || (map.desert ? '#d9b97c' : PAL.grass), map: map.desert ? null : grassTex, roughness: 1 }));
     m.scale.z = hl.squash ?? 1;
     m.position.set(hl.x, 0, hl.z);
     m.receiveShadow = true;
     m.castShadow = true;
     root.add(m);
+    if (hl.snow) {
+      // snow cap: the top 45% of the peak
+      const cap = [];
+      for (let i = 0; i <= 8; i++) {
+        const f = (i / 8) * 0.55;
+        cap.push(new THREE.Vector2(hl.r * f, hl.h * Math.cos((f * Math.PI) / 2) ** 2 + 0.25));
+      }
+      const sm = new THREE.Mesh(new THREE.LatheGeometry(cap.reverse(), 32), new THREE.MeshStandardMaterial({ color: '#f3f6f8', roughness: 0.7 }));
+      sm.scale.z = hl.squash ?? 1;
+      sm.position.set(hl.x, 0, hl.z);
+      sm.castShadow = true;
+      root.add(sm);
+    }
   }
   // zebra crossings at junctions
   for (const [cx, cz, along] of map.crossings ?? [[40, -7.5, false], [40, 7.5, false], [31.5, 0, true], [48.5, 0, true]]) {
@@ -382,18 +408,71 @@ export function createWorld(scene, map) {
     block(g, 0.5, 0.9, d, pm, -w / 2 + 0.05, top + 0.4, 0, { r: 0.15 });
     block(g, w - 0.4, 0.14, d - 0.4, mat(deck, { roughness: 1 }), 0, top + 0.05, 0, { r: 0.04, cast: false });
   }
-  /** Rooftop solar for prosumer homes/buildings (GDD §8.6). */
-  function rooftopPV(c, g, height) {
-    const panel = new THREE.MeshStandardMaterial({ color: '#2b4f8a', roughness: 0.25, metalness: 0.4 });
-    const n = Math.max(1, Math.round(c.pvKWp / 3));
-    for (let i = 0; i < n; i++) {
-      const pv = new THREE.Mesh(rbox(1.6, 0.12, 2.2, 0.04), panel);
-      if (c.type === 'home' || c.type === 'lowincome') {
-        pv.position.set(-1.8 + i * 1.8, height - 1.25, 1.3);
-        pv.rotation.x = 0.55;
-      } else pv.position.set(-c.w / 4 + (i % 3) * 2.2, height + 0.25, -c.d / 4 + Math.floor(i / 3) * 2.6);
-      g.add(pv);
+  /** Rooftop solar for prosumer homes/buildings (GDD §8.6): a neat array of framed modules that
+   *  fits the roof it sits on, a rail frame, and an inverter on the side wall. Built as its own
+   *  group (hidden until the street joins the solar programme) and merged into one draw call. */
+  const pvModule = new THREE.MeshStandardMaterial({ map: pvTexture(), roughness: 0.28, metalness: 0.35 });
+  const pvRail = new THREE.MeshStandardMaterial({ color: '#aeb5bf', roughness: 0.4, metalness: 0.6 });
+  const pvBox = new THREE.MeshStandardMaterial({ color: '#e4e7ea', roughness: 0.6 });
+  const pvLed = new THREE.MeshStandardMaterial({ color: '#3ad16b', emissive: '#3ad16b', emissiveIntensity: 1.2 });
+  const pvGeo = new THREE.BoxGeometry(1, 0.09, 1);
+  function pvArray(parent, W, L, cols, rows, y) {
+    const pw = W / cols;
+    const ph = L / rows;
+    block(parent, W + 0.16, 0.08, L + 0.16, pvRail, 0, y - 0.07, 0, { r: 0.03, cast: false });
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        const m = new THREE.Mesh(pvGeo, pvModule);
+        m.scale.set(pw - 0.07, 1, ph - 0.07);
+        m.position.set(-W / 2 + pw * (i + 0.5), y, -L / 2 + ph * (j + 0.5));
+        m.receiveShadow = true;
+        parent.add(m);
+      }
     }
+  }
+  function rooftopPV(c, g, height) {
+    const pv = new THREE.Group();
+    pv.name = 'pv';
+    g.add(pv);
+    const R0 = g.userData.roof;
+    if (R0) {
+      // pitched roof: modules on the street-facing slope, clear of the ridge and the eaves
+      const a = Math.atan2(R0.rise, R0.d / 2);
+      const run = R0.d / 2 + R0.oh;
+      const slabW = run / Math.cos(a);
+      const slope = new THREE.Group();
+      slope.position.set(0, R0.eave + R0.rise - (run / 2) * Math.tan(a) + R0.t / 2, run / 2);
+      slope.rotation.x = a;
+      pv.add(slope);
+      const z0 = -slabW / 2 + 0.75;
+      const z1 = slabW / 2 - R0.oh / Math.cos(a) + 0.05;
+      const W = R0.w - 1.1;
+      const L = z1 - z0;
+      const cols = Math.max(2, Math.round(W / 1.1));
+      const rows = Math.max(1, Math.round(L / 1.7));
+      const arr = new THREE.Group();
+      arr.position.z = (z0 + z1) / 2;
+      slope.add(arr);
+      pvArray(arr, W, L, cols, rows, R0.t / 2 + 0.12);
+      // inverter and conduit on the side wall
+      const sx = R0.w / 2 + 0.12;
+      block(pv, 0.22, 1.1, 0.8, pvBox, sx, 1.6, R0.d * 0.2, { r: 0.05 });
+      block(pv, 0.06, 0.12, 0.12, pvLed, sx + 0.12, 1.95, R0.d * 0.2 - 0.22, { r: 0.02, cast: false });
+      block(pv, 0.1, R0.eave - 2.1, 0.1, pvRail, sx, 2.15 + (R0.eave - 2.1) / 2, R0.d * 0.2 + 0.25, { r: 0.03, cast: false });
+    } else {
+      // flat roof: tilted rows that fit the roof deck
+      const W = Math.min(c.w - 3, 10);
+      const rowsN = Math.max(1, Math.min(3, Math.floor((c.d - 3) / 2.8)));
+      for (let k = 0; k < rowsN; k++) {
+        const row = new THREE.Group();
+        row.position.set(0, height + 0.55, -((rowsN - 1) * 2.8) / 2 + k * 2.8);
+        row.rotation.x = -0.4;
+        pv.add(row);
+        pvArray(row, W, 1.9, Math.max(2, Math.round(W / 1.1)), 1, 0);
+      }
+    }
+    pv.visible = false;
+    return pv;
   }
   /** Builders for the customer types introduced by Stages 2–5. Returns the building height. */
   function buildExtra(c, g) {
@@ -404,7 +483,7 @@ export function createWorld(scene, map) {
     const pad = (col = PAL.concrete) => block(g, w + 0.6, 0.4, d + 0.6, mat(col), 0, 0.2, 0, { r: 0.12, cast: false });
     const sign = (text, y, z, fg = '#5a2e1a', bg = '#f3e6c8', sw = 4.4) => plane(g, sw, sw * 0.25, new THREE.MeshStandardMaterial({ map: plateTexture(text, fg, bg), emissive: '#ffffff', emissiveMap: plateTexture(text, fg, bg), emissiveIntensity: 0 }), 0, y, z);
     let height = 6;
-    switch (c.type) {
+    switch (c.look || c.type) {
       case 'lowincome': {
         // terrace row: three joined cottages under one roof
         const wallH = 3.6;
@@ -630,6 +709,62 @@ export function createWorld(scene, map) {
         addPool(c.id, c.x, c.z, Math.max(w, d) * 1.6, '#ffe2b0', 0.24);
         break;
       }
+      case 'resort': {
+        // island resort: low white wings with balconies, a pool, palms and a thatched beach bar
+        pad('#e6d6b0');
+        const wing = mat('#f6f1e6');
+        const wallH = 3.2 * 3;
+        block(g, w * 0.62, wallH, d * 0.55, wing, -w * 0.16, wallH / 2 + 0.3, -d * 0.18, { r: 0.4 });
+        block(g, w * 0.3, wallH - 3.2, d * 0.5, wing, w * 0.32, (wallH - 3.2) / 2 + 0.3, -d * 0.2, { r: 0.4 });
+        for (let f = 1; f <= 3; f++) block(g, w * 0.62 + 0.2, 0.2, 1.4, mat('#cfe7e3'), -w * 0.16, 0.3 + f * 3.2 - 1.6, -d * 0.18 + d * 0.275 + 0.6, { r: 0.06 });
+        flatRoof(g, w * 0.62, d * 0.55, wallH + 0.3, '#e9e2d4', '#cbbfa8');
+        const pool = new THREE.Mesh(rbox(w * 0.36, 0.25, d * 0.26, 0.6), new THREE.MeshStandardMaterial({ color: '#3fb6c9', roughness: 0.1, metalness: 0.1, emissive: '#3fd4e9', emissiveIntensity: 0.12 }));
+        pool.position.set(-w * 0.12, 0.45, d * 0.3);
+        g.add(pool);
+        const bar = new THREE.Group();
+        bar.position.set(w * 0.33, 0, d * 0.28);
+        g.add(bar);
+        cyl(bar, 2.4, 2.4, 2.4, mat('#a0784e'), 0, 1.5, 0, 12);
+        const thatch = new THREE.Mesh(new THREE.ConeGeometry(4.2, 2.6, 10), mat('#d8b46a', { roughness: 1 }));
+        thatch.position.set(0, 4.1, 0);
+        thatch.castShadow = true;
+        bar.add(thatch);
+        for (const ux of [-w * 0.3, -w * 0.18, -w * 0.06, w * 0.06]) {
+          const um = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.7, 8), mat(['#d9443a', '#f6efe2', '#3d6fa8', '#f2b630'][Math.abs(Math.round(ux)) % 4]));
+          um.position.set(ux, 2.4, d * 0.45);
+          g.add(um);
+          cyl(g, 0.06, 0.06, 2.2, mat('#e9e4da'), ux, 1.3, d * 0.45, 6);
+        }
+        height = wallH + 1;
+        ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
+        facadeWindows(c.id, g, w * 0.62, d * 0.55, wallH + 0.3, 3, Math.max(3, Math.round(w / 5)), 2, 1.2, 1.3, () => false, 0.3);
+        if (c.label) groups[c.id].signs.push({ mesh: sign(c.label, 2.4, d * 0.1 + 0.3, '#ffffff', '#2f8f8a', 5), emissive: 0.8 });
+        addBulb(c.id, new THREE.Vector3(c.x, 3.4, c.z), 0.4, 0.1, new THREE.Color(2.4, 1.8, 1.0));
+        addPool(c.id, c.x, c.z, Math.max(w, d) * 1.8, '#ffd9a0', 0.2);
+        break;
+      }
+      case 'desal': {
+        // desalination plant: membrane hall, two big clear-water tanks and an intake pipe to the sea
+        pad();
+        block(g, w * 0.55, 6, d * 0.7, mat('#e3e8ea'), -w * 0.2, 3.3, 0, { r: 0.3 });
+        gable(g, w * 0.55, d * 0.7, 6.3, 1.6, mat('#e3e8ea'), new THREE.MeshStandardMaterial({ color: '#3d7fa8', map: ribTexture('#5b9ac2'), roughness: 0.6 }), 0.4);
+        for (const tz of [-d * 0.22, d * 0.22]) {
+          cyl(g, 3.4, 3.4, 5.5, mat('#b9cbd3', { roughness: 0.4, metalness: 0.2 }), w * 0.3, 3.05, tz, 24);
+          const lid = new THREE.Mesh(new THREE.SphereGeometry(3.45, 24, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat('#9fb5c4', { metalness: 0.2 }));
+          lid.position.set(w * 0.3, 5.8, tz);
+          g.add(lid);
+        }
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 24, 10), mat('#3f7fa8', { metalness: 0.3 }));
+        pipe.rotation.x = Math.PI / 2;
+        pipe.position.set(-w * 0.2, 0.7, d / 2 + 11);
+        g.add(pipe);
+        height = 8;
+        ensureGroup(c.id, new THREE.Vector3(c.x, height, c.z), height);
+        facadeWindows(c.id, g, w * 0.55, d * 0.7, 6.3, 1, 3, 2, 1.4, 1.0, () => false, 0.3);
+        groups[c.id].signs.push({ mesh: sign(c.label || 'WATER', 5.2, d * 0.35 + 0.1, '#ffffff', '#3f7fa8', 4), emissive: 0.6 });
+        addPool(c.id, c.x, c.z, 26, '#cfe2ff', 0.2);
+        break;
+      }
       default: {
         // generic block
         pad();
@@ -661,6 +796,7 @@ export function createWorld(scene, map) {
       block(g, w + 0.5, 0.5, d + 0.5, mat(PAL.concrete), 0, 0.25, 0, { r: 0.12, cast: false }); // plinth
       block(g, w, wallH, d, wallMat, 0, wallH / 2 + 0.3, 0, { r: 0.3 });
       height = gable(g, w, d, wallH + 0.3, 2.8, wallMat, roofMat, 0.75);
+      g.userData.roof = { w, d, eave: wallH + 0.3, rise: 2.8, oh: 0.75, t: 0.45 };
       block(g, 0.9, 2.4, 0.9, mat(PAL.brick), w * 0.26, wallH + 2.6, -d * 0.18, { r: 0.1 }); // chimney
       block(g, 1.3, 2.3, 0.25, mat(PAL.woodDark), 0, 1.45, d / 2 + 0.06, { r: 0.08, cast: false }); // door
       block(g, 2.0, 0.24, 0.9, mat(PAL.concrete), 0, 0.42, d / 2 + 0.5, { r: 0.06, cast: false }); // step
@@ -811,7 +947,7 @@ export function createWorld(scene, map) {
     } else {
       height = buildExtra(c, g);
     }
-    if (c.pvKWp) rooftopPV(c, g, height);
+    const pv = c.pvKWp ? rooftopPV(c, g, height) : null;
     let plot = null;
     if (c.appearAt != null) {
       // growth plot: cleared lot with a "new home" stake until the family moves in
@@ -824,7 +960,7 @@ export function createWorld(scene, map) {
       cyl(plot, 0.1, 0.1, 2.4, mat(PAL.wood), 0, 1.2, c.d / 2 - 0.6, 6);
       plane(plot, 2.4, 1.2, new THREE.MeshStandardMaterial({ map: plateTexture('NEW HOME', '#5a2e1a', '#ffd25a', 384, 160), side: THREE.DoubleSide }), 0, 2.2, c.d / 2 - 0.55);
     }
-    buildings[c.id] = { group: g, height, c, plot };
+    buildings[c.id] = { group: g, height, c, plot, pv };
   }
 
   // ---------------------------------------------------------------- generation sources
@@ -1042,6 +1178,89 @@ export function createWorld(scene, map) {
         addBulb(meta.gid, new THREE.Vector3(x + w / 2 + 4, 8.6, z + 2), 0.4, 0.1, new THREE.Color(2.4, 2.0, 1.4));
         break;
       }
+      case 'runriver': {
+        // run-of-river weir across the stream with a small turbine house
+        const conc = mat('#d7d2c7');
+        block(g, w, 3, 3, conc, x, 1.5, z, { r: 0.3 });
+        const fall = new THREE.Mesh(rbox(w * 0.7, 2.6, 1.4, 0.4), new THREE.MeshStandardMaterial({ color: '#7fc3e8', roughness: 0.1, emissive: '#2d7fb0', emissiveIntensity: 0.25, transparent: true, opacity: 0.85 }));
+        fall.position.set(x, 1.4, z + 2);
+        g.add(fall);
+        block(g, 9, 6, 7, mat('#efe3c6'), x - w / 2 - 3, 3, z - 8, { r: 0.5 });
+        const rg = new THREE.Group();
+        rg.position.set(x - w / 2 - 3, 0, z - 8);
+        g.add(rg);
+        gable(rg, 9, 7, 6, 2, mat('#efe3c6'), roof('#3d6fa8'), 0.4);
+        ensureGroup(meta.gid, new THREE.Vector3(x, 7, z), 7);
+        addBulb(meta.gid, new THREE.Vector3(x - w / 2 - 3, 5, z - 4.4), 0.4, 0.1, new THREE.Color(2.4, 2.0, 1.4));
+        break;
+      }
+      case 'pumped': {
+        // pumped storage: a high lake behind a dam, a penstock down the slope, the powerhouse below
+        const lake = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.55, w * 0.6, 1, 32), new THREE.MeshStandardMaterial({ color: '#3a87b5', roughness: 0.15, metalness: 0.1 }));
+        lake.position.set(x - w * 0.15, 8.6, z - d * 1.4);
+        lake.scale.z = 0.7;
+        g.add(lake);
+        const bank = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.62, w * 0.85, 8.2, 32), mat('#7a8a5a', { roughness: 1 }));
+        bank.position.set(x - w * 0.15, 4.1, z - d * 1.4);
+        bank.scale.z = 0.7;
+        bank.castShadow = true;
+        g.add(bank);
+        block(g, w * 0.9, 9.2, 2.5, mat('#d7d2c7'), x - w * 0.15, 4.6, z - d * 0.95, { r: 0.4 });
+        const pen = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, d * 1.1, 12), mat('#8d9399', { metalness: 0.4 }));
+        pen.rotation.x = Math.PI / 2 - 0.35;
+        pen.position.set(x, 4.2, z - d * 0.45);
+        g.add(pen);
+        block(g, w * 0.6, 7, d * 0.45, mat('#efe3c6'), x, 3.6, z + d * 0.15, { r: 0.5 });
+        const pg = new THREE.Group();
+        pg.position.set(x, 0, z + d * 0.15);
+        g.add(pg);
+        gable(pg, w * 0.6, d * 0.45, 7.2, 2.2, mat('#efe3c6'), roof('#3d6fa8'), 0.5);
+        const low = new THREE.Mesh(rbox(w * 0.9, 0.4, d * 0.35, 1), new THREE.MeshStandardMaterial({ color: '#3a87b5', roughness: 0.15 }));
+        low.position.set(x, 0.3, z + d * 0.55);
+        g.add(low);
+        meta.lake = lake;
+        lattice(g, x + w * 0.4, z + d * 0.1, 14);
+        ensureGroup(meta.gid, new THREE.Vector3(x, 9, z), 9);
+        addBulb(meta.gid, new THREE.Vector3(x, 6, z + d * 0.4), 0.4, 0.1, new THREE.Color(2.4, 2.0, 1.4));
+        break;
+      }
+      case 'h2': {
+        // green hydrogen: electrolyser hall, white spherical tanks and a hydrogen turbine stack
+        block(g, w + 4, 0.35, d + 4, mat(PAL.concrete), x, 0.18, z, { r: 0.15, cast: false });
+        block(g, w * 0.5, 6, d * 0.5, mat('#e8eef2'), x - w * 0.22, 3.3, z - d * 0.2, { r: 0.4 });
+        block(g, w * 0.5 + 0.1, 0.4, d * 0.5 + 0.1, mat('#3fa7d6'), x - w * 0.22, 5.4, z - d * 0.2, { r: 0.1 });
+        for (const [tx, tz] of [[w * 0.2, -d * 0.25], [w * 0.38, -d * 0.25], [w * 0.29, d * 0.15]]) {
+          const sph = new THREE.Mesh(new THREE.SphereGeometry(3.2, 20, 14), mat('#f4f6f7', { roughness: 0.35, metalness: 0.2 }));
+          sph.position.set(x + tx, 4.4, z + tz);
+          sph.castShadow = true;
+          g.add(sph);
+          for (const lx of [-1.6, 1.6]) cyl(g, 0.2, 0.2, 2.4, mat('#9aa0a6'), x + tx + lx, 1.4, z + tz, 6);
+        }
+        block(g, w * 0.3, 4, d * 0.3, mat('#d7dbde'), x - w * 0.22, 2.2, z + d * 0.3, { r: 0.3 });
+        cyl(g, 0.6, 0.7, 6, mat('#c9ccce', { metalness: 0.4 }), x - w * 0.12, 6, z + d * 0.3, 12);
+        meta.stacks.push(new THREE.Vector3(x - w * 0.12, 9.2, z + d * 0.3));
+        plane(g, 3.6, 0.9, new THREE.MeshStandardMaterial({ map: plateTexture('H₂', '#ffffff', '#3fa7d6') }), x - w * 0.22, 4.2, z - d * 0.2 + d * 0.25 + 0.05);
+        ensureGroup(meta.gid, new THREE.Vector3(x, 7, z), 7);
+        addBulb(meta.gid, new THREE.Vector3(x - w * 0.22, 6, z), 0.4, 0.1, new THREE.Color(1.6, 2.2, 2.6));
+        break;
+      }
+      case 'hub':
+      case 'hubKalani':
+      case 'hubHighvale':
+      case 'hubDunefield':
+      case 'hubAurora': {
+        // HVDC converter station: a long valve hall, a DC yard and towers heading off the tile
+        block(g, w + 4, 0.3, d + 4, mat('#b8b2a6'), x, 0.15, z, { r: 0.15, cast: false });
+        block(g, w * 0.6, 9, d * 0.5, mat('#dfe5ea'), x, 4.8, z - d * 0.15, { r: 0.4 });
+        block(g, w * 0.6 + 0.1, 0.5, d * 0.5 + 0.1, mat(def.color || '#6a4fb3'), x, 7.5, z - d * 0.15, { r: 0.1 });
+        for (let i = 0; i < 4; i++) cyl(g, 0.5, 0.7, 6, mat('#c9ccce', { metalness: 0.4 }), x - w * 0.25 + i * (w * 0.17), 3.2, z + d * 0.3, 10);
+        for (const k of [0, 1, 2]) lattice(g, x + (def.dirX ?? 1) * (w / 2 + 8 + k * 34), z + (def.dirZ ?? 0) * (k * 34), 24);
+        plane(g, w * 0.4, 1.4, new THREE.MeshStandardMaterial({ map: plateTexture(def.label || 'HVDC', '#ffffff', def.color || '#6a4fb3') }), x, 6, z - d * 0.15 + d * 0.25 + 0.06);
+        ensureGroup(meta.gid, new THREE.Vector3(x, 10, z), 10);
+        addBulb(meta.gid, new THREE.Vector3(x, 8, z + d * 0.1), 0.5, 0.1, new THREE.Color(2.0, 1.6, 2.6));
+        break;
+      }
+      case 'market':
       case 'import': {
         // interconnector: switchyard + towers marching off the tile
         block(g, w, 0.3, d, mat('#b8b2a6'), x, 0.15, z, { r: 0.15, cast: false });
@@ -1385,7 +1604,7 @@ export function createWorld(scene, map) {
     for (const c0 of core) if (rectDist(x, z, c0) < 1) return R() > 0.07;
     return false;
   };
-  const nTrees = Math.min(1900, Math.round((1500 * (T.hw * T.hd)) / (224 * 224)));
+  const nTrees = Math.min(1900, Math.round(((1500 * (T.hw * T.hd)) / (224 * 224)) * (map.treeDensity ?? 1)));
   for (let i = 0; i < nTrees; i++) {
     const x = T.cx + (R() * 2 - 1) * T.hw;
     const z = T.cz + (R() * 2 - 1) * T.hd;
@@ -1397,7 +1616,7 @@ export function createWorld(scene, map) {
     for (let k = 0; k < n; k++) {
       const tx = x + (R() - 0.5) * 8;
       const tz = z + (R() - 0.5) * 8;
-      if (!blocked(tx, tz)) treeSpots.push([tx, tz, 1.8 + R() * 1.8, 0, R() < 0.3]);
+      if (!blocked(tx, tz)) treeSpots.push([tx, tz, 1.8 + R() * 1.8, 0, R() < (map.palms ? 0.65 : 0.3)]);
     }
   }
   treeSpots.push(...satTrees);
@@ -1435,7 +1654,32 @@ export function createWorld(scene, map) {
       canopy.setColorAt(k++, col.setHSL(0.25 + R() * 0.05, 0.55, 0.2 + R() * 0.05));
     });
     let pk = 0;
-    pines.forEach(([x, z, s, y0]) => {
+    // tropical maps: the "pine" share becomes palms (tall leaning trunk, a crown of long fronds)
+    const palmGeo = new THREE.SphereGeometry(1, 8, 4);
+    const fronds = map.palms ? new THREE.InstancedMesh(palmGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }), pines.length * 6) : null;
+    let fk = 0;
+    if (map.palms) {
+      const e = new THREE.Euler();
+      pines.forEach(([x, z, s, y0]) => {
+        const hh = s * 3.2;
+        const lean = (R() - 0.5) * 0.25;
+        q.setFromEuler(e.set(lean, 0, lean * 0.6));
+        m4.compose(v.set(x, y0 + hh / 2, z), q, sc.set(0.7, hh, 0.7));
+        trunk.setMatrixAt(tk++, m4);
+        const tx = x + Math.sin(lean * 0.6) * hh * -0.5;
+        const tz = z + Math.sin(lean) * hh * 0.5;
+        const top = y0 + hh;
+        for (let f = 0; f < 6; f++) {
+          const a = (f / 6) * Math.PI * 2 + R() * 0.4;
+          q.setFromEuler(e.set(0.35, -a, 0, 'YXZ'));
+          m4.compose(v.set(tx + Math.cos(a) * s * 0.9, top - s * 0.15, tz + Math.sin(a) * s * 0.9), q, sc.set(s * 1.25, s * 0.12, s * 0.38));
+          fronds.setMatrixAt(fk, m4);
+          fronds.setColorAt(fk++, col.setHSL(0.27 + R() * 0.05, 0.5 + R() * 0.1, 0.22 + R() * 0.06));
+        }
+      });
+      q.identity();
+    }
+    if (!map.palms) pines.forEach(([x, z, s, y0]) => {
       const hh = s * 1.4;
       m4.compose(v.set(x, y0 + hh * 0.5, z), q, sc.set(1, hh, 1));
       trunk.setMatrixAt(tk++, m4);
@@ -1447,6 +1691,12 @@ export function createWorld(scene, map) {
       }
     });
     canopy.count = k;
+    pine.count = pk;
+    if (fronds) {
+      fronds.count = fk;
+      fronds.castShadow = true;
+      root.add(fronds);
+    }
     for (const im of [canopy, trunk, pine]) {
       im.castShadow = true;
       im.receiveShadow = true;
@@ -1570,6 +1820,10 @@ export function createWorld(scene, map) {
     }
     if (generator) markLive(generator.beacon), markLive(generator.fan);
     for (const id in buildings) {
+      if (buildings[id].pv) {
+        markLive(buildings[id].pv);
+        mergeStatic(buildings[id].pv);
+      }
       dynamicRoots.add(buildings[id].group);
       if (buildings[id].plot) dynamicRoots.add(buildings[id].plot);
     }
@@ -1643,6 +1897,13 @@ export function createWorld(scene, map) {
       return m;
     },
     removeSource,
+    /** Rooftop solar appears when the street joins the solar programme. Returns true if it changed. */
+    setSolar(id, on) {
+      const pv = buildings[id]?.pv;
+      if (!pv || pv.visible === !!on) return false;
+      pv.visible = !!on;
+      return true;
+    },
     /** Growth: a new family moves in — the house replaces its plot. */
     setActive(id, on) {
       const b = buildings[id];

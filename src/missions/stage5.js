@@ -459,11 +459,11 @@ const TUT5 = [
 
 const ENDING5 = {
   common: ['For a full day and night, every light in Aurora ran on wind, sun and stored energy.', 'Cars charged when the wind blew and gave power back at dusk. Towers eased off at the peak. The grid healed itself.'],
-  sustainable: 'A 100 % clean, reliable and fair city. From one diesel generator to this. The campaign is complete.',
+  sustainable: 'A 100 % clean, reliable and fair city. From one diesel generator to this. Chapter I is complete.',
   reliable: 'Clean, reliable power for a whole metropolis. The future arrived.',
   hardwon: 'It took everything you had, but Aurora ran on clean power.',
   decisions: { smart: 'Smart charging tamed the evening EV rush.', v2g: 'Parked cars became the city’s second battery.', dr: 'The data centre and towers flexed their demand.', healed: 'The network healed itself in under a minute.' },
-  next: 'Thank you for playing Gridforge.',
+  next: 'Chapter II: grids of the world. First stop, Kalani Island.',
 };
 
 const PROG = {
@@ -587,17 +587,42 @@ export default {
   chips: ['credits', 'cash', 'demand', 'mix', 'renew', 'co2', 'weather', 'powered', 'afford'],
   objectives,
   weather: W5,
+  cast: { mayor: { name: 'Elena Varga', role: 'Mayor of Aurora', color: '#b48cf2', initials: 'EV' }, nana: { name: 'Rosa Lindqvist', role: 'Aurora resident since 1948', color: '#d9b38c', initials: 'RL' } },
+  quests: {
+    perDay: [1, 2],
+    pool: [
+      { key: 'clean90', who: 'maya', title: 'A nearly clean day', text: 'Make at least 85% of today’s electricity from clean sources.', goal: { type: 'renewShare', pct: 85 }, reward: { credits: 3000, rep: 4 }, news: 'Aurora runs 85% clean for a whole day.' },
+      { key: 'charged', who: 'sofia', title: 'Batteries ready for the peak', text: 'Have the city batteries at 75% or more by 17:00.', goal: { type: 'socAt', pct: 75, hour: 17 }, reward: { credits: 2000, rep: 2 } },
+      { key: 'evNight', who: 'ravi', title: 'Taxi drivers’ charging night', text: 'The taxi co-op is charging the whole fleet tonight. Keep all three EV hubs lit from 18:00 to 23:00.', goal: { type: 'keepLit', ids: ['ev1', 'ev2', 'ev3'], fromH: 18, toH: 23 }, reward: { credits: 2500, rep: 3 } },
+      { key: 'surgery', who: 'maya', title: 'Heart surgery marathon', text: 'Aurora General has a full day of heart operations. Keep it lit from 08:00 to 20:00.', goal: { type: 'keepLit', ids: ['hospital'], fromH: 8, toH: 20 }, reward: { credits: 2000, rep: 4 }, news: 'Aurora General completes record day of heart surgery.' },
+      { key: 'noCuts', who: 'maya', title: 'An evening without cuts', text: 'No one switched off between 17:00 and 22:00, please.', goal: { type: 'noShed', fromH: 17, toH: 22 }, reward: { credits: 1500, rep: 2 } },
+    ],
+  },
+  story: [
+    { day: 1, hour: 9, who: 'mayor', lines: ['Aurora has promised the country a 100% clean city. Everyone is watching to see if it can be done.'] },
+    { day: 2, hour: 11, who: 'leila', title: 'Can Aurora really go 100% clean?', text: 'The Aurora Herald wants a headline. Will you promise a date?', options: [{ label: 'Promise it this week', rep: 5, note: 'Bold, and people love it. Now deliver.', news: 'Utility promises a 100% clean day this week.' }, { label: 'Stay cautious', rep: 1, news: 'Utility says clean power is coming, step by step.' }] },
+    { day: 3, hour: 8, who: 'tom', title: 'Data centre staff want to work from home', text: 'Tom says the data centre staff would rather work from home on the heat-dome day. Their homes need power instead of the office towers.', options: [{ label: 'Back the plan', rep: 3, note: 'Fewer commuters on a scorching day.', news: 'Aurora workers stay home on the hottest day.' }, { label: 'Stay out of it', rep: 0 }] },
+    { day: 4, hour: 17, who: 'amira', lines: ['The pupils have a big board in the hall counting clean hours. They cheer every time it goes up.'] },
+    { day: 6, hour: 10, who: 'nana', lines: ['When I was a girl, the sky over the city was grey with smoke. Look at it now.'] },
+  ],
   events: {
-    count: [3, 4],
+    count: [7, 9],
+    minGapH: 6,
     avoidH: [[46, 74]], // heat dome, data-centre expansion and the feeder fault (day 3)
     pool: [
       { key: 'cyclone', kind: 'cyclone', weight: 2, windowH: [80, 150], warnH: 18, durH: 6, params: { name: 'Mira', track: [-470, 330, 470, 250], width: 120, p: 0.45, max: 3 } },
-      { key: 'windTrip', kind: 'blackout', weight: 1, windowH: [24, 44], warnH: 2, durH: 3 },
+      { key: 'windTrip', kind: 'blackout', weight: 1, windowH: [24, 44], warnH: 2, durH: 3, params: { targets: ['windN', 'windE'] } },
       { key: 'xfmr', kind: 'xfmrFail', weight: 1, windowH: [80, 150], warnH: 3 },
       { key: 'quake', kind: 'quake', weight: 1, windowH: [80, 150], params: { zone: { x: 0, z: 0, r: 380 }, p: 0.25, max: 3 } },
       { key: 'campus', kind: 'arrivals', weight: 2, windowH: [24, 44], warnH: 8, durH: 12, params: { group: 'campus', at: { x: 290, z: 150 }, title: 'A tech campus is opening', text: 'Nova Campus, a new office tower for 2,000 workers, opens beside the depot.', say: 'Nova Campus opens soon. Big new load, and they want it clean.', goodNews: 'Nova Campus opens on 100% clean power.', badNews: 'New tech campus opens without power.' } },
       { key: 'lights', kind: 'festival', weight: 2, windowH: [80, 150], atHour: 18, warnH: 18, durH: 5, params: { name: 'The festival of lights', text: 'Aurora’s festival of lights strings lanterns through every street on the west side.', ids: ['a1', 'a2', 'a3', 'a4', 'r1', 'r2', 's1', 's2', 's3'], mult: 1.25, startH: 18, at: { x: -200, z: 0 }, say: 'Festival of lights tonight! Every home on the west side will be glowing.', goodNews: 'Festival of lights shines on clean power.', badNews: 'Power cut dims the festival of lights.' } },
       { key: 'solarRoofs', kind: 'request', weight: 1, windowH: [24, 150], params: { who: 'maya', title: 'Solar roofs for the terraces', text: 'Families in the terrace rows ask for help to put solar panels on their roofs. Their bills are the highest share of income in the city.', options: [{ label: 'Fund it · 3,000 ¢', cost: 3000, yes: true, rep: 6, trust: 5, cls: ['lowincome'], note: 'Lower bills and cleaner power.', news: 'Terrace families get help with solar roofs.' }, { label: 'Not now', rep: -3, note: 'The terraces keep paying high bills.' }] } },
+      { key: 'storm', kind: 'storm', weight: 1, windowH: [80, 150], warnH: 3, durH: 3, params: { p: 0.15, max: 2 } },
+      { key: 'theft', kind: 'theft', weight: 1, windowH: [80, 150], warnH: 6, params: { cost: 800 } },
+      { key: 'inspection', kind: 'inspection', weight: 1, windowH: [24, 44], warnH: 10, params: { grant: 2000 } },
+      { key: 'evBuses', kind: 'request', weight: 1, windowH: [24, 150], params: { who: 'maya', title: 'Free charging for the electric buses', text: 'The city council asks you to charge its new electric buses for free overnight for the first month.', options: [{ label: 'Agree · 1,500 ¢', cost: 1500, yes: true, rep: 6, trust: 3, note: 'Cleaner buses, happier council.', news: 'Aurora’s electric buses charge free on clean power.' }, { label: 'Charge the usual price', rep: -2, note: 'The council grumbles but pays.' }] } },
+      { key: 'minister', kind: 'vipVisit', weight: 1, windowH: [80, 150], atHour: 11, warnH: 14, durH: 3, params: { name: 'The prime minister', who: 'mayor', zone: { x: 105, z: -80, r: 75 }, grant: 3000, text: 'The prime minister is touring Aurora’s business district to launch the national clean-power plan.', goodNews: 'Prime minister: “Aurora shows the whole country the way.”', badNews: 'Prime minister’s clean-power launch hit by a power cut.' } },
+      { key: 'cyber', kind: 'cyberAlert', weight: 1, windowH: [80, 150], warnH: 6, params: { cost: 1500 } },
     ],
     protests: { hvNearHomes: 25, compensation: 3000, outages: 6, credit: 2500 },
   },

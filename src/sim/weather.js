@@ -35,6 +35,7 @@ export function weatherAt(seed, clockMin, script = {}) {
   const s = script[day] || {};
   let label = s.label || null;
   if (s.heat) temp += 9;
+  if (s.tempAdd) temp += s.tempAdd; // a cold snap in the mountains, or desert heat
   if (s.storm) {
     // storm peaks mid-day: winds above the turbines' 25 m/s cut-out, heavy cloud
     const k = Math.max(0, 1 - Math.abs(hourOfDay - (s.peakHour ?? 14)) / 7);
@@ -47,7 +48,7 @@ export function weatherAt(seed, clockMin, script = {}) {
   }
   if (s.cloud != null) cloud = s.cloud;
   if (s.wind != null) wind = s.wind;
-  return { hourAbs, hourOfDay, day, cloud, wind, temp, sun: sunAt(hourOfDay), label, storm: !!s.storm, calm: !!s.calm, heat: !!s.heat };
+  return { hourAbs, hourOfDay, day, cloud, wind, temp, sun: sunAt(hourOfDay), label, storm: !!s.storm, calm: !!s.calm, heat: !!s.heat || temp > 38, cold: temp < -2 };
 }
 
 /** Solar output fraction of peak (kWp) for the given weather. */

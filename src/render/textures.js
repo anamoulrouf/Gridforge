@@ -280,3 +280,37 @@ export function roofTileTexture() {
     }
   });
 }
+
+/** One solar module seen from above: silver frame, dark blue cells with fine grid lines and busbars. */
+export function pvTexture() {
+  return canvasTex('pv-module', 128, 208, (g) => {
+    g.fillStyle = '#d5dae2';
+    g.fillRect(0, 0, 128, 208);
+    const grad = g.createLinearGradient(0, 0, 128, 208);
+    grad.addColorStop(0, '#2a4a86');
+    grad.addColorStop(0.55, '#16294f');
+    grad.addColorStop(1, '#22407a');
+    g.fillStyle = grad;
+    g.fillRect(6, 6, 116, 196);
+    g.strokeStyle = 'rgba(160,190,235,0.35)';
+    g.lineWidth = 1.5;
+    for (let i = 1; i < 6; i++) {
+      g.beginPath();
+      g.moveTo(6 + (i * 116) / 6, 6);
+      g.lineTo(6 + (i * 116) / 6, 202);
+      g.stroke();
+    }
+    for (let j = 1; j < 10; j++) {
+      g.beginPath();
+      g.moveTo(6, 6 + (j * 196) / 10);
+      g.lineTo(122, 6 + (j * 196) / 10);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(255,255,255,0.12)';
+    g.beginPath();
+    g.moveTo(6, 6);
+    g.lineTo(70, 6);
+    g.lineTo(6, 90);
+    g.fill();
+  });
+}

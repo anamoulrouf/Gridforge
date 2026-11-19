@@ -1,6 +1,6 @@
 // Economy & stakeholders (GDD §7.7 trust, §8.1–8.4 revenue/costs/tariffs, §8.6 prosumers,
 // §8.5 contracts). Simplified, illustrative model — labelled as such in-game.
-import { typeDef } from './power.js';
+import { typeDef, marketPrice } from './power.js';
 
 /** Tariff class of a customer type (Stage 1 has a single flat tariff). */
 export const classOf = (bal, type) => typeDef(bal, type).cls || 'home';
@@ -100,7 +100,22 @@ export function accrueMinute(state, bal) {
     L.co2 += kwh * (T.co2 || 0);
     if (T.renewable || T.variable || T.storageClean) L.kWhRenew += kwh;
     else if (!T.storage) L.kWhFossil += kwh;
-    if (T.costPerKWh) L.energyCost += kwh * T.costPerKWh;
+    if (T.market) {
+      const pr = marketPrice(state, bal);
+      L.energyCost += kwh * pr;
+      L.tradeBuy = (L.tradeBuy || 0) + kwh * pr;
+    } else if (T.costPerKWh) L.energyCost += kwh * T.costPerKWh;
+  }
+  // power sold abroad through a market link, and batteries buying cheap power to charge
+  for (const id in state.gens) {
+    const g = state.gens[id];
+    const T = bal.sourceTypes?.[g.type] || {};
+    if (T.market && g.exportKW > 0) {
+      const v = (g.exportKW / 60) * marketPrice(state, bal) * (T.exportShare ?? 0.9);
+      L.exportCredit += v;
+      L.tradeSell = (L.tradeSell || 0) + v;
+      state.stats.tradeSell = (state.stats.tradeSell || 0) + v;
+    }
   }
 }
 
