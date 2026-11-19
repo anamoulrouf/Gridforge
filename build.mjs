@@ -1,6 +1,6 @@
 // Gridforge build: bundle src/main.js (+ three) into one IIFE and inline it,
 // together with src/styles.css, into src/index.html → dist/gridforge.html.
-// The output is a single self-contained file with no network dependencies (GDD §18.5).
+// Both outputs are self-contained files with no network dependencies (GDD §18.5).
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 
@@ -29,5 +29,6 @@ const html = tpl
 
 mkdirSync('dist', { recursive: true });
 writeFileSync('dist/gridforge.html', html);
-const kb = (statSync('dist/gridforge.html').size / 1024).toFixed(0);
-console.log(`dist/gridforge.html  ${kb} KB${dev ? ' (dev)' : ''}`);
+writeFileSync('dist/index.html', html);
+const kb = (statSync('dist/index.html').size / 1024).toFixed(0);
+console.log(`dist/index.html and dist/gridforge.html  ${kb} KB each${dev ? ' (dev)' : ''}`);
